@@ -1,0 +1,1456 @@
+openapi: 3.0.3
+info:
+  title: "Внутренний API модуля коммуникаций SberCRM для маркетплейса"
+  version: "1.0.0"
+  description: |
+    Внутренний API модуля коммуникаций SberCRM для маркетплейса.
+    Обеспечивает управление провайдерами, их конфигурациями и установками для тенантов.
+tags:
+  - name: "Провайдеры"
+    description: "Управление провайдерами и их конфигурациями"
+  - name: "Конфигурации тенантов"
+    description: "Управление конфигурациями провайдеров для тенантов"
+security:
+  - BearerAuth: []
+components:
+  parameters:
+    CorrelationId:
+      name: "X-Correlation-ID"
+      in: header
+      description: "Уникальный идентификатор для отслеживания запроса. Рекомендуется генерировать UUID v4 для каждого нового запроса. При повторной отправке того же запроса используйте тот же X-Correlation-ID."
+      schema:
+        type: string
+        format: uuid
+        example: "550e8400-e29b-41d4-a716-446655440000"
+    AppCode:
+      name: appCode
+      in: path
+      required: true
+      description: "Системное имя провайдера. Должно соответствовать системному имени приложения в маркетплейсе."
+      schema:
+        type: string
+        minLength: 3
+        maxLength: 50
+        pattern: "^[a-z][a-z0-9_]{2,49}$"
+        example: "whatsapp_provider"
+    IdempotencyKey:
+      name: "Idempotency-Key"
+      in: header
+      required: true
+      description: "Уникальный ключ для идемпотентных операций. Должен быть уникальным для каждого запроса и может быть повторно использован для повторения того же запроса в течение 24 часов. После этого ключ считается устаревшим и его повторное использование приведет к выполнению нового запроса."
+      schema:
+        type: string
+        format: uuid
+        example: "223e4567-e89b-12d3-a456-426614174111"
+    ExternalTenantId:
+      name: "externalTenantId"
+      in: header
+      required: true
+      description: "Внешний идентификатор тенанта, выполняющего операцию."
+      schema:
+        type: string
+        format: uuid
+        example: "123e4567-e89b-12d3-a456-426614174222"
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: "JWT токен для аутентификации. Срок действия - 24 часа. После истечения срока действия необходимо запросить новый токен."
+  schemas:
+    ErrorDetail:
+      type: object
+      properties:
+        field:
+          type: string
+          description: "Название поля, содержащего ошибку"
+          example: "configurationVersion"
+        code:
+          type: string
+          description: "Код ошибки для данного поля"
+          example: "INVALID_FORMAT"
+        message:
+          type: string
+          description: "Описание ошибки для данного поля"
+          example: "Версия должна соответствовать формату MAJOR.MINOR.PATCH"
+        suggestion:
+          type: string
+          nullable: true
+          description: "Рекомендация по исправлению ошибки"
+          example: "Используйте формат X.Y.Z, где X, Y, Z - неотрицательные целые числа"
+      required: [code, message]
+    
+    # Базовая схема для всех ответов
+    BaseResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          description: "Флаг успешного выполнения"
+        meta:
+          type: object
+          properties:
+            correlationId:
+              type: string
+              description: "Идентификатор корреляции"
+              example: "550e8400-e29b-41d4-a716-446655440000"
+            timestamp:
+              type: string
+              format: date-time
+              description: "Время выполнения запроса"
+              example: "2023-01-01T12:00:00Z"
+          required: [correlationId, timestamp]
+      required: [success, meta]
+
+    # Схема для ответов с ошибкой
+    StandardErrorResponse:
+      allOf:
+        - $ref: "#/components/schemas/BaseResponse"
+        - type: object
+          properties:
+            success:
+              example: false
+            error:
+              type: object
+              properties:
+                code:
+                  type: string
+                  description: "Код ошибки"
+                  example: "INVALID_REQUEST"
+                  enum:
+                    - INVALID_REQUEST           # Общая ошибка валидации запроса
+                    - VALIDATION_ERROR          # Ошибка валидации полей
+                    - RESOURCE_NOT_FOUND        # Ресурс не найден
+                    - RESOURCE_ALREADY_EXISTS   # Ресурс уже существует
+                    - RESOURCE_CONFLICT         # Конфликт при работе с ресурсом
+                    - DEPENDENCY_ERROR          # Ошибка зависимостей между ресурсами
+                    - AUTHORIZATION_ERROR       # Ошибка авторизации
+                    - AUTHENTICATION_ERROR      # Ошибка аутентификации
+                    - TOKEN_EXPIRED             # Истёк срок действия токена
+                    - INTERNAL_SERVER_ERROR     # Внутренняя ошибка сервера
+                    - SERVICE_UNAVAILABLE       # Сервис недоступен
+                    - CONFIGURATION_LOCKED      # Конфигурация заблокирована
+                    - VERSION_CONFLICT          # Конфликт версий
+                    - INVALID_VERSION_SEQUENCE  # Неверная последовательность версий
+                    - INVALID_PROVIDER_STATE    # Некорректное состояние провайдера
+                message:
+                  type: string
+                  description: "Сообщение об ошибке"
+                  example: "Запрос содержит некорректные данные"
+                details:
+                  type: array
+                  items:
+                    $ref: "#/components/schemas/ErrorDetail"
+                  description: "Подробная информация об ошибках в полях запроса"
+                requestId:
+                  type: string
+                  description: "Идентификатор запроса"
+                  example: "req-a1b2c3d4"
+                recommendedAction:
+                  type: string
+                  nullable: true
+                  description: "Рекомендуемое действие для исправления ошибки"
+                  example: "Повторите попытку через 60 секунд или обратитесь в службу поддержки"
+              required: [code, message]
+          required: [error]
+    
+    # Схема для успешных ответов
+    StandardResponse:
+      allOf:
+        - $ref: "#/components/schemas/BaseResponse"
+        - type: object
+          properties:
+            success:
+              example: true
+            data:
+              type: object
+              nullable: true
+              description: "Данные ответа"
+            message:
+              type: string
+              description: "Информационное сообщение"
+              example: "Операция выполнена успешно"
+          required: [message]
+    
+    # Провайдеры
+    ProviderCreateRequest:
+      type: object
+      properties:
+        appCode:
+          type: string
+          description: "Системное имя провайдера. Должно соответствовать системному имени приложения в маркетплейсе."
+          pattern: "^[a-z][a-z0-9_]{2,49}$"
+          minLength: 3
+          maxLength: 50
+          example: "whatsapp_provider"
+      required:
+        - appCode
+    
+    ProviderResponse:
+      type: object
+      properties:
+        providerId:
+          type: string
+          description: "Идентификатор провайдера"
+          example: "provider-001"
+        appCode:
+          type: string
+          description: "Системное имя провайдера"
+          example: "whatsapp_provider"
+        status:
+          type: string
+          enum: [ACTIVE, INACTIVE]
+          description: "Статус провайдера"
+          example: "ACTIVE"
+        createdAt:
+          type: string
+          format: date-time
+          description: "Дата создания"
+          example: "2023-01-01T12:00:00Z"
+        updatedAt:
+          type: string
+          format: date-time
+          description: "Дата обновления"
+          example: "2023-01-02T12:00:00Z"
+        correlationId:
+          type: string
+          description: "Идентификатор корреляции"
+          example: "550e8400-e29b-41d4-a716-446655440000"
+      required: [providerId, appCode, status]
+    
+    # Эндпоинты провайдера
+    ProviderEndpoints:
+      type: object
+      properties:
+        sendMessage:
+          type: string
+          format: uri
+          description: "Эндпоинт отправки сообщения. Используется для отправки нового сообщения клиенту."
+          pattern: "^https?://.*$"
+          minLength: 10
+          maxLength: 2083
+          example: "https://provider.example.com/api/sendMessage"
+        updateMessageContent:
+          type: string
+          format: uri
+          description: "Эндпоинт обновления содержимого сообщения. Используется для изменения текста уже отправленного сообщения."
+          pattern: "^https?://.*$"
+          minLength: 10
+          maxLength: 2083
+          example: "https://provider.example.com/api/updateMessageContent"
+        updateMessageStatus:
+          type: string
+          format: uri
+          description: "Эндпоинт обновления статуса сообщения. Используется для информирования провайдера о смене статуса сообщения (доставлено, прочитано и т.д.)."
+          pattern: "^https?://.*$"
+          minLength: 10
+          maxLength: 2083
+          example: "https://provider.example.com/api/updateMessageStatus"
+        markChatRead:
+          type: string
+          format: uri
+          description: "Эндпоинт отметки о прочтении чата. Используется для информирования провайдера о прочтении всех сообщений в чате."
+          pattern: "^https?://.*$"
+          minLength: 10
+          maxLength: 2083
+          example: "https://provider.example.com/api/markChatRead"
+        disconnect:
+          type: string
+          format: uri
+          description: "Эндпоинт отключения. Используется при отключении приложения провайдера в маркетплейсе."
+          pattern: "^https?://.*$"
+          minLength: 10
+          maxLength: 2083
+          example: "https://provider.example.com/api/disconnect"
+        getChannels:
+          type: string
+          format: uri
+          description: "Эндпоинт получения каналов. Используется для получения списка доступных каналов связи клиента. Одноканальные провайдеры (Авито, Viber, ВКонтакте и другие) должны поддерживать этот эндпоинт, но могут возвращать пустой список каналов."
+          pattern: "^https?://.*$"
+          minLength: 10
+          maxLength: 2083
+          example: "https://provider.example.com/api/getChannels"
+        # Опциональные эндпоинты
+        setWebhook:
+          type: string
+          format: uri
+          description: "Эндпоинт установки вебхука. Используется для настройки получения уведомлений от провайдера."
+          pattern: "^https?://.*$"
+          minLength: 10
+          maxLength: 2083
+          example: "https://provider.example.com/api/setWebhook"
+        deleteWebhook:
+          type: string
+          format: uri
+          description: "Эндпоинт удаления вебхука. Используется для отключения уведомлений от провайдера."
+          pattern: "^https?://.*$"
+          minLength: 10
+          maxLength: 2083
+          example: "https://provider.example.com/api/deleteWebhook"
+        getMessageHistory:
+          type: string
+          format: uri
+          description: "Эндпоинт получения истории сообщений. Используется при первичной синхронизации чатов."
+          pattern: "^https?://.*$"
+          minLength: 10
+          maxLength: 2083
+          example: "https://provider.example.com/api/getMessageHistory"
+        bulkMessages:
+          type: string
+          format: uri
+          description: "Эндпоинт массовой отправки сообщений. Используется для пакетной отправки нескольких сообщений."
+          pattern: "^https?://.*$"
+          minLength: 10
+          maxLength: 2083
+          example: "https://provider.example.com/api/bulkMessages"
+      required:
+        - sendMessage
+        - updateMessageContent
+        - updateMessageStatus
+        - markChatRead
+        - disconnect
+        - getChannels
+      additionalProperties: false
+    
+    # Конфигурации провайдеров
+    ProviderConfigurationRequest:
+      type: object
+      properties:
+        appCode:
+          type: string
+          description: "Системное имя провайдера"
+          minLength: 3
+          maxLength: 50
+          pattern: "^[a-z][a-z0-9_]{2,49}$"
+          example: "whatsapp_provider"
+        appVersion:
+          type: string
+          description: "Версия приложения провайдера. Должна соответствовать формату MAJOR.MINOR.PATCH."
+          pattern: "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+          example: "1.2.3"
+        configurationVersion:
+          type: string
+          description: "Версия конфигурации. Должна соответствовать формату MAJOR.MINOR.PATCH и увеличиваться при каждом обновлении."
+          pattern: "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+          example: "1.0.0"
+        providerLabel:
+          type: string
+          description: "Название провайдера"
+          minLength: 1
+          maxLength: 100
+          example: "WhatsApp"
+        endpoints:
+          $ref: "#/components/schemas/ProviderEndpoints"
+        authConfig:
+          type: object
+          description: "Конфигурация аутентификации"
+          additionalProperties: true
+          example:
+            type: "API_KEY"
+            headers:
+              "X-API-Key": "{client_token}"
+      required:
+        - appCode
+        - appVersion
+        - configurationVersion
+        - providerLabel
+        - endpoints
+        - authConfig
+    
+    ProviderConfigurationResponse:
+      type: object
+      properties:
+        configurationId:
+          type: string
+          description: "Идентификатор конфигурации"
+          example: "config-001"
+        providerId:
+          type: string
+          description: "Идентификатор провайдера"
+          example: "provider-001"
+        appCode:
+          type: string
+          description: "Системное имя провайдера"
+          example: "whatsapp_provider"
+        appVersion:
+          type: string
+          description: "Версия приложения провайдера"
+          example: "1.2.3"
+        configurationVersion:
+          type: string
+          description: "Версия конфигурации"
+          example: "1.0.0"
+        providerLabel:
+          type: string
+          description: "Название провайдера"
+          example: "WhatsApp"
+        status:
+          type: string
+          enum: [ACTIVE, INACTIVE]
+          description: "Статус конфигурации"
+          example: "ACTIVE"
+        endpoints:
+          $ref: "#/components/schemas/ProviderEndpoints"
+        createdAt:
+          type: string
+          format: date-time
+          description: "Дата создания"
+          example: "2023-01-01T12:00:00Z"
+        updatedAt:
+          type: string
+          format: date-time
+          description: "Дата обновления"
+          example: "2023-01-02T12:00:00Z"
+        correlationId:
+          type: string
+          description: "Идентификатор корреляции"
+          example: "550e8400-e29b-41d4-a716-446655440000"
+      required: [configurationId, providerId, appCode, appVersion, configurationVersion, providerLabel, endpoints]
+    
+    # Конфигурации тенантов
+    TenantConfigurationRequest:
+      type: object
+      properties:
+        appCode:
+          type: string
+          description: "Системное имя провайдера"
+          minLength: 3
+          maxLength: 50
+          pattern: "^[a-z][a-z0-9_]{2,49}$"
+          example: "whatsapp_provider"
+        appVersion:
+          type: string
+          description: "Версия приложения провайдера"
+          pattern: "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+          example: "2.1.0"
+      required:
+        - appCode
+        - appVersion
+    
+    TenantConfigurationUpdateRequest:
+      type: object
+      properties:
+        appCode:
+          type: string
+          description: "Системное имя провайдера"
+          minLength: 3
+          maxLength: 50
+          pattern: "^[a-z][a-z0-9_]{2,49}$"
+          example: "whatsapp_provider"
+        appVersion:
+          type: string
+          description: "Версия приложения провайдера"
+          pattern: "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+          example: "2.2.0"
+      required:
+        - appCode
+        - appVersion
+    
+    
+    TenantConfigurationResponse:
+      type: object
+      properties:
+        configurationId:
+          type: string
+          description: "Идентификатор конфигурации тенанта"
+          example: "config-001"
+        providerId:
+          type: string
+          description: "Идентификатор провайдера"
+          example: "provider-001"
+        appCode:
+          type: string
+          description: "Системное имя провайдера"
+          example: "whatsapp_provider"
+        appVersion:
+          type: string
+          description: "Версия приложения провайдера"
+          example: "2.1.0"
+        status:
+          type: string
+          enum: [ACTIVE, INACTIVE]
+          description: "Статус конфигурации"
+          example: "ACTIVE"
+        configuredAt:
+          type: string
+          format: date-time
+          description: "Дата создания конфигурации"
+          example: "2023-01-01T12:00:00Z"
+        updatedAt:
+          type: string
+          format: date-time
+          description: "Дата обновления"
+          example: "2023-01-02T12:00:00Z"
+        deactivatedAt:
+          type: string
+          format: date-time
+          nullable: true
+          description: "Дата деактивации (если деактивировано)"
+          example: null
+        correlationId:
+          type: string
+          description: "Идентификатор корреляции"
+          example: "550e8400-e29b-41d4-a716-446655440000"
+      required: [configurationId, providerId, appCode, appVersion, status, configuredAt, updatedAt]
+    
+    # Схема для запроса обработки новой версии приложения провайдера
+    ProviderVersionUpdateRequest:
+      type: object
+      properties:
+        appCode:
+          type: string
+          description: "Системное имя провайдера"
+          minLength: 3
+          maxLength: 50
+          pattern: "^[a-z][a-z0-9_]{2,49}$"
+          example: "whatsapp_provider"
+        newAppVersion:
+          type: string
+          description: "Новая версия приложения провайдера"
+          pattern: "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+          example: "2.2.0"
+      required:
+        - appCode
+        - newAppVersion
+  
+  responses:
+    BadRequest:
+      description: "Некорректный запрос"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/StandardErrorResponse"
+          examples:
+            validationError:
+              summary: "Ошибка валидации"
+              value:
+                success: false
+                error:
+                  code: "VALIDATION_ERROR"
+                  message: "Запрос содержит некорректные данные"
+                  details:
+                    - field: "appCode"
+                      code: "INVALID_FORMAT"
+                      message: "Системное имя должно начинаться с буквы в нижнем регистре, за которой следуют буквы в нижнем регистре, цифры или символы подчеркивания"
+                      suggestion: "Используйте только строчные буквы латинского алфавита, цифры и символы подчеркивания. Имя должно начинаться с буквы."
+                  requestId: "req-a1b2c3d4"
+                  recommendedAction: "Исправьте формат системного имени в соответствии с требованиями"
+                meta:
+                  correlationId: "550e8400-e29b-41d4-a716-446655440000"
+                  timestamp: "2023-01-01T12:00:00Z"
+            missingField:
+              summary: "Отсутствует обязательное поле"
+              value:
+                success: false
+                error:
+                  code: "VALIDATION_ERROR"
+                  message: "Отсутствует обязательное поле"
+                  details:
+                    - field: "providerLabel"
+                      code: "REQUIRED_FIELD"
+                      message: "Поле providerLabel является обязательным"
+                      suggestion: "Добавьте поле providerLabel в запрос"
+                  requestId: "req-a1b2c3d4"
+                  recommendedAction: "Добавьте все обязательные поля в запрос"
+                meta:
+                  correlationId: "550e8400-e29b-41d4-a716-446655440000"
+                  timestamp: "2023-01-01T12:00:00Z"
+            invalidVersion:
+              summary: "Некорректный формат версии"
+              value:
+                success: false
+                error:
+                  code: "VALIDATION_ERROR"
+                  message: "Некорректный формат версии"
+                  details:
+                    - field: "appVersion"
+                      code: "INVALID_FORMAT"
+                      message: "Версия должна соответствовать формату MAJOR.MINOR.PATCH"
+                      suggestion: "Используйте формат X.Y.Z, где X, Y, Z - неотрицательные целые числа (например, 1.0.0, 2.3.1)"
+                  requestId: "req-a1b2c3d4"
+                  recommendedAction: "Исправьте формат версии в соответствии с семантическим версионированием"
+                meta:
+                  correlationId: "550e8400-e29b-41d4-a716-446655440000"
+                  timestamp: "2023-01-01T12:00:00Z"
+            invalidEndpoint:
+              summary: "Некорректный URL эндпоинта"
+              value:
+                success: false
+                error:
+                  code: "VALIDATION_ERROR"
+                  message: "Некорректный URL эндпоинта"
+                  details:
+                    - field: "endpoints.sendMessage"
+                      code: "INVALID_URL"
+                      message: "Указанный URL не соответствует правилам формирования URL"
+                      suggestion: "URL должен начинаться с http:// или https:// и содержать валидный домен"
+                  requestId: "req-a1b2c3d4"
+                  recommendedAction: "Исправьте формат URL в соответствии с требованиями RFC 3986"
+                meta:
+                  correlationId: "550e8400-e29b-41d4-a716-446655440000"
+                  timestamp: "2023-01-01T12:00:00Z"
+            versionConflict:
+              summary: "Конфликт версий"
+              value:
+                success: false
+                error:
+                  code: "VERSION_CONFLICT"
+                  message: "Некорректное обновление версии конфигурации"
+                  details:
+                    - field: "configurationVersion"
+                      code: "VERSION_MUST_INCREASE"
+                      message: "Новая версия конфигурации должна быть выше текущей (1.0.0)"
+                      suggestion: "Укажите версию выше 1.0.0, например 1.0.1 или 1.1.0"
+                  requestId: "req-a1b2c3d4"
+                  recommendedAction: "Увеличьте версию конфигурации в соответствии с семантическим версионированием"
+                meta:
+                  correlationId: "550e8400-e29b-41d4-a716-446655440000"
+                  timestamp: "2023-01-01T12:00:00Z"
+    Unauthorized:
+      description: "Не авторизован"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/StandardErrorResponse"
+          examples:
+            tokenExpired:
+              summary: "Истёк срок действия токена"
+              value:
+                success: false
+                error:
+                  code: "TOKEN_EXPIRED"
+                  message: "Срок действия токена аутентификации истёк"
+                  requestId: "req-a1b2c3d4"
+                  recommendedAction: "Получите новый токен авторизации"
+                meta:
+                  correlationId: "550e8400-e29b-41d4-a716-446655440000"
+                  timestamp: "2023-01-01T12:00:00Z"
+            invalidToken:
+              summary: "Недействительный токен"
+              value:
+                success: false
+                error:
+                  code: "AUTHENTICATION_ERROR"
+                  message: "Недействительный токен аутентификации"
+                  requestId: "req-a1b2c3d4"
+                  recommendedAction: "Проверьте корректность токена авторизации или получите новый"
+                meta:
+                  correlationId: "550e8400-e29b-41d4-a716-446655440000"
+                  timestamp: "2023-01-01T12:00:00Z"
+            missingToken:
+              summary: "Отсутствует токен"
+              value:
+                success: false
+                error:
+                  code: "AUTHENTICATION_ERROR"
+                  message: "Отсутствует токен аутентификации"
+                  requestId: "req-a1b2c3d4"
+                  recommendedAction: "Добавьте токен авторизации в заголовок Authorization"
+                meta:
+                  correlationId: "550e8400-e29b-41d4-a716-446655440000"
+                  timestamp: "2023-01-01T12:00:00Z"
+    NotFound:
+      description: "Ресурс не найден"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/StandardErrorResponse"
+          examples:
+            providerNotFound:
+              summary: "Провайдер не найден"
+              value:
+                success: false
+                error:
+                  code: "RESOURCE_NOT_FOUND"
+                  message: "Указанный провайдер не найден"
+                  requestId: "req-a1b2c3d4"
+                  recommendedAction: "Проверьте идентификатор провайдера и повторите запрос"
+                meta:
+                  correlationId: "550e8400-e29b-41d4-a716-446655440000"
+                  timestamp: "2023-01-01T12:00:00Z"
+            configNotFound:
+              summary: "Конфигурация не найдена"
+              value:
+                success: false
+                error:
+                  code: "RESOURCE_NOT_FOUND"
+                  message: "Указанная конфигурация не найдена"
+                  requestId: "req-a1b2c3d4"
+                  recommendedAction: "Проверьте идентификатор конфигурации и повторите запрос"
+                meta:
+                  correlationId: "550e8400-e29b-41d4-a716-446655440000"
+                  timestamp: "2023-01-01T12:00:00Z"
+            versionNotFound:
+              summary: "Версия не найдена"
+              value:
+                success: false
+                error:
+                  code: "RESOURCE_NOT_FOUND"
+                  message: "Указанная версия не найдена"
+                  requestId: "req-a1b2c3d4"
+                  recommendedAction: "Проверьте номер версии и повторите запрос"
+                meta:
+                  correlationId: "550e8400-e29b-41d4-a716-446655440000"
+                  timestamp: "2023-01-01T12:00:00Z"
+    Conflict:
+      description: "Конфликт данных"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/StandardErrorResponse"
+          examples:
+            providerExists:
+              summary: "Провайдер уже существует"
+              value:
+                success: false
+                error:
+                  code: "RESOURCE_ALREADY_EXISTS"
+                  message: "Провайдер с таким системным именем уже существует"
+                  requestId: "req-a1b2c3d4"
+                  recommendedAction: "Используйте другое системное имя провайдера или обновите существующего провайдера"
+                meta:
+                  correlationId: "550e8400-e29b-41d4-a716-446655440000"
+                  timestamp: "2023-01-01T12:00:00Z"
+            configExists:
+              summary: "Конфигурация уже существует"
+              value:
+                success: false
+                error:
+                  code: "RESOURCE_ALREADY_EXISTS"
+                  message: "Конфигурация для этого провайдера уже существует"
+                  requestId: "req-a1b2c3d4"
+                  recommendedAction: "Используйте метод обновления конфигурации вместо создания новой"
+                meta:
+                  correlationId: "550e8400-e29b-41d4-a716-446655440000"
+                  timestamp: "2023-01-01T12:00:00Z"
+            configurationLocked:
+              summary: "Конфигурация заблокирована"
+              value:
+                success: false
+                error:
+                  code: "CONFIGURATION_LOCKED"
+                  message: "Конфигурация заблокирована другой операцией"
+                  requestId: "req-a1b2c3d4"
+                  recommendedAction: "Повторите попытку через 30 секунд"
+                meta:
+                  correlationId: "550e8400-e29b-41d4-a716-446655440000"
+                  timestamp: "2023-01-01T12:00:00Z"
+    InternalError:
+      description: "Внутренняя ошибка сервера"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/StandardErrorResponse"
+          examples:
+            serverError:
+              summary: "Ошибка сервера"
+              value:
+                success: false
+                error:
+                  code: "INTERNAL_SERVER_ERROR"
+                  message: "Произошла непредвиденная ошибка"
+                  requestId: "req-a1b2c3d4"
+                  recommendedAction: "Повторите запрос позже или обратитесь в службу поддержки"
+                meta:
+                  correlationId: "550e8400-e29b-41d4-a716-446655440000"
+                  timestamp: "2023-01-01T12:00:00Z"
+            databaseError:
+              summary: "Ошибка базы данных"
+              value:
+                success: false
+                error:
+                  code: "INTERNAL_SERVER_ERROR"
+                  message: "Ошибка при работе с базой данных"
+                  requestId: "req-a1b2c3d4"
+                  recommendedAction: "Повторите запрос позже или обратитесь в службу поддержки"
+                meta:
+                  correlationId: "550e8400-e29b-41d4-a716-446655440000"
+                  timestamp: "2023-01-01T12:00:00Z"
+    TooManyRequests:
+      description: "Слишком много запросов"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/StandardErrorResponse"
+          examples:
+            rateLimitExceeded:
+              summary: "Превышен лимит запросов"
+              value:
+                success: false
+                error:
+                  code: "RATE_LIMIT_EXCEEDED"
+                  message: "Превышен лимит запросов"
+                  requestId: "req-a1b2c3d4"
+                  recommendedAction: "Пожалуйста, повторите запрос через 60 секунд"
+                meta:
+                  correlationId: "550e8400-e29b-41d4-a716-446655440000"
+                  timestamp: "2023-01-01T12:00:00Z"
+
+paths:
+  # ПРОВАЙДЕРЫ
+  /v1/providers:
+    post:
+      tags:
+        - Провайдеры
+      summary: "Загрузка провайдера"
+      operationId: uploadProvider
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+        - $ref: "#/components/parameters/CorrelationId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ProviderCreateRequest"
+            examples:
+              whatsappExample:
+                summary: "Создание провайдера WhatsApp"
+                value:
+                  appCode: "whatsapp_provider"
+                description: |
+                  При создании провайдера необходимо указать только системное имя (appCode).
+                  Этот идентификатор должен быть уникальным и совпадать с системным именем приложения в маркетплейсе.
+              telegramExample:
+                summary: "Создание провайдера Telegram" 
+                value:
+                  appCode: "telegram_provider"
+              viberExample:
+                summary: "Создание провайдера Viber" 
+                value:
+                  appCode: "viber_provider"
+      responses:
+        '201':
+          description: "Провайдер загружен"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StandardResponse"
+              examples:
+                whatsappProvider:
+                  summary: "Успешная загрузка провайдера WhatsApp"
+                  value:
+                    success: true
+                    data:
+                      providerId: "provider-123"
+                      appCode: "whatsapp_provider"
+                    message: "Провайдер успешно загружен"
+                    meta:
+                      correlationId: "550e8400-e29b-41d4-a716-446655440000"
+                      timestamp: "2023-01-01T12:00:00Z"
+                  description: |
+                    Успешное создание провайдера возвращает:
+                    - providerId: Уникальный идентификатор провайдера в системе
+                    - appCode: Системное имя провайдера, указанное при создании
+                telegramProvider:
+                  summary: "Успешная загрузка провайдера Telegram"
+                  value:
+                    success: true
+                    data:
+                      providerId: "provider-456"
+                      appCode: "telegram_provider"
+                    message: "Провайдер успешно загружен"
+                    meta:
+                      correlationId: "550e8400-e29b-41d4-a716-446655440001"
+                      timestamp: "2023-01-01T12:05:00Z"
+        '400':
+          $ref: "#/components/responses/BadRequest"
+        '401':
+          $ref: "#/components/responses/Unauthorized"
+        '409':
+          $ref: "#/components/responses/Conflict"
+        '429':
+          $ref: "#/components/responses/TooManyRequests"
+  
+  # КОНФИГУРАЦИИ ПРОВАЙДЕРОВ
+  /v1/provider-configurations:
+    post:
+      tags:
+        - Провайдеры
+      summary: "Создать или обновить конфигурацию провайдера"
+      description: "Создает новую конфигурацию провайдера. Если для указанного appCode уже существует конфигурация, создается новая версия со статусом ACTIVE, а предыдущая переводится в статус INACTIVE."
+      operationId: createProviderConfiguration
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+        - $ref: "#/components/parameters/CorrelationId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ProviderConfigurationRequest"
+            examples:
+              whatsappExample:
+                summary: "Конфигурация провайдера WhatsApp"
+                value:
+                  appCode: "whatsapp_provider"
+                  appVersion: "2.1.0"
+                  configurationVersion: "1.0.0"
+                  providerLabel: "WhatsApp"
+                  endpoints:
+                    sendMessage: "https://provider.example.com/api/sendMessage"
+                    updateMessageContent: "https://provider.example.com/api/updateMessageContent"
+                    updateMessageStatus: "https://provider.example.com/api/updateMessageStatus"
+                    markChatRead: "https://provider.example.com/api/markChatRead"
+                    disconnect: "https://provider.example.com/api/disconnect"
+                    setWebhook: "https://provider.example.com/api/setWebhook"
+                    deleteWebhook: "https://provider.example.com/api/deleteWebhook"
+                    getChannels: "https://provider.example.com/api/getChannels"
+                  authConfig:
+                    type: "API_KEY"
+                    headers:
+                      "X-API-Key": "{api_token}"
+                description: |
+                  Пример конфигурации для провайдера WhatsApp. Конфигурация включает:
+                  - appCode: Системное имя провайдера
+                  - appVersion: Версия приложения провайдера
+                  - configurationVersion: Версия конфигурации
+                  - providerLabel: Отображаемое название провайдера
+                  - endpoints: Набор URL-адресов API провайдера
+                  - authConfig: Настройки аутентификации для взаимодействия с API провайдера
+              telegramExample:
+                summary: "Конфигурация провайдера Telegram"
+                value:
+                  appCode: "telegram_provider"
+                  appVersion: "1.5.0"
+                  configurationVersion: "1.0.0"
+                  providerLabel: "Telegram"
+                  endpoints:
+                    sendMessage: "https://telegram.example.com/api/sendMessage"
+                    updateMessageContent: "https://telegram.example.com/api/updateMessageContent"
+                    updateMessageStatus: "https://telegram.example.com/api/updateMessageStatus"
+                    markChatRead: "https://telegram.example.com/api/markChatRead"
+                    disconnect: "https://telegram.example.com/api/disconnect"
+                    setWebhook: "https://telegram.example.com/api/setWebhook"
+                    deleteWebhook: "https://telegram.example.com/api/deleteWebhook"
+                    getChannels: "https://telegram.example.com/api/getChannels"
+                  authConfig:
+                    type: "JWT"
+                    authUrl: "https://telegram.example.com/api/auth"
+      responses:
+        '201':
+          description: "Конфигурация создана"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StandardResponse"
+              examples:
+                whatsappConfig:
+                  summary: "Создание конфигурации провайдера WhatsApp"
+                  value:
+                    success: true
+                    data:
+                      configurationId: "config-001"
+                      providerId: "provider-123"
+                      appCode: "whatsapp_provider"
+                      appVersion: "1.2.3"
+                      configurationVersion: "1.0.0"
+                      providerLabel: "WhatsApp"
+                      status: "ACTIVE"
+                      endpoints:
+                        sendMessage: "https://provider.example.com/api/sendMessage"
+                        updateMessageContent: "https://provider.example.com/api/updateMessageContent"
+                        updateMessageStatus: "https://provider.example.com/api/updateMessageStatus"
+                        markChatRead: "https://provider.example.com/api/markChatRead"
+                        disconnect: "https://provider.example.com/api/disconnect"
+                        setWebhook: "https://provider.example.com/api/setWebhook"
+                        deleteWebhook: "https://provider.example.com/api/deleteWebhook"
+                        getChannels: "https://provider.example.com/api/getChannels"
+                    message: "Конфигурация провайдера успешно создана"
+                    meta:
+                      correlationId: "550e8400-e29b-41d4-a716-446655440000"
+                      timestamp: "2023-01-01T12:00:00Z"
+                telegramConfig:
+                  summary: "Создание конфигурации провайдера Telegram"
+                  value:
+                    success: true
+                    data:
+                      configurationId: "config-002"
+                      providerId: "provider-456"
+                      appCode: "telegram_provider"
+                      appVersion: "2.0.1"
+                      configurationVersion: "1.0.0"
+                      providerLabel: "Telegram"
+                      status: "ACTIVE"
+                      endpoints:
+                        sendMessage: "https://telegram.example.com/api/sendMessage"
+                        updateMessageContent: "https://telegram.example.com/api/updateMessageContent"
+                        updateMessageStatus: "https://telegram.example.com/api/updateMessageStatus"
+                        markChatRead: "https://telegram.example.com/api/markChatRead"
+                        disconnect: "https://telegram.example.com/api/disconnect"
+                        setWebhook: "https://telegram.example.com/api/setWebhook"
+                        deleteWebhook: "https://telegram.example.com/api/deleteWebhook"
+                        getChannels: "https://telegram.example.com/api/getChannels"
+                    message: "Конфигурация провайдера успешно создана"
+                    meta:
+                      correlationId: "550e8400-e29b-41d4-a716-446655440001"
+                      timestamp: "2023-01-01T12:05:00Z"
+        '400':
+          $ref: "#/components/responses/BadRequest"
+        '401':
+          $ref: "#/components/responses/Unauthorized"
+        '409':
+          $ref: "#/components/responses/Conflict"
+        '429':
+          $ref: "#/components/responses/TooManyRequests"
+    
+    get:
+      tags:
+        - Провайдеры
+      summary: "Получить конфигурацию провайдера"
+      operationId: getProviderConfiguration
+      parameters:
+        - $ref: "#/components/parameters/CorrelationId"
+        - name: appCode
+          in: query
+          required: true
+          description: "Системное имя провайдера"
+          schema:
+            type: string
+            pattern: "^[a-z][a-z0-9_]{2,49}$"
+            example: "whatsapp_provider"
+        - name: appVersion
+          in: query
+          required: true
+          description: "Версия приложения провайдера"
+          schema:
+            type: string
+            pattern: "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+            example: "2.1.0"
+      responses:
+        '200':
+          description: "Конфигурация провайдера для указанной версии"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StandardResponse"
+              examples:
+                whatsappConfigGet:
+                  summary: "Получение конфигурации провайдера WhatsApp"
+                  value:
+                    success: true
+                    data:
+                      configurationId: "config-001"
+                      providerId: "provider-123"
+                      appCode: "whatsapp_provider"
+                      appVersion: "2.1.0"
+                      configurationVersion: "1.0.0"
+                      providerLabel: "WhatsApp"
+                      status: "ACTIVE"
+                      endpoints:
+                        sendMessage: "https://provider.example.com/api/sendMessage"
+                        updateMessageContent: "https://provider.example.com/api/updateMessageContent"
+                        updateMessageStatus: "https://provider.example.com/api/updateMessageStatus"
+                        markChatRead: "https://provider.example.com/api/markChatRead"
+                        disconnect: "https://provider.example.com/api/disconnect"
+                        setWebhook: "https://provider.example.com/api/setWebhook"
+                        deleteWebhook: "https://provider.example.com/api/deleteWebhook"
+                        getChannels: "https://provider.example.com/api/getChannels"
+                    message: "Конфигурация провайдера успешно получена"
+                    meta:
+                      correlationId: "550e8400-e29b-41d4-a716-446655440000"
+                      timestamp: "2023-01-01T12:00:00Z"
+        '401':
+          $ref: "#/components/responses/Unauthorized"
+        '404':
+          $ref: "#/components/responses/NotFound"
+
+  /v1/providers/version-update:
+    post:
+      tags:
+        - Провайдеры
+      summary: "Обработка новой версии приложения провайдера"
+      description: "Обрабатывает уведомление от маркетплейса о создании новой версии приложения провайдера и автоматически создает конфигурацию для этой версии на основе активной конфигурации предыдущей версии."
+      operationId: handleProviderVersionUpdate
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+        - $ref: "#/components/parameters/CorrelationId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ProviderVersionUpdateRequest"
+            examples:
+              whatsappNewVersion:
+                summary: "Новая версия WhatsApp"
+                value:
+                  appCode: "whatsapp_provider"
+                  newAppVersion: "2.2.0"
+                description: |
+                  Запрос на создание конфигурации для новой версии приложения WhatsApp.
+                  Система автоматически скопирует конфигурацию из предыдущей активной версии провайдера.
+              telegramNewVersion:
+                summary: "Новая версия Telegram"
+                value:
+                  appCode: "telegram_provider"
+                  newAppVersion: "1.6.0"
+      responses:
+        '201':
+          description: "Конфигурация для новой версии успешно создана"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StandardResponse"
+              examples:
+                successExample:
+                  summary: "Успешное создание конфигурации для новой версии"
+                  value:
+                    success: true
+                    data:
+                      configurationId: "config-003"
+                      providerId: "provider-123"
+                      appCode: "whatsapp_provider"
+                      appVersion: "2.2.0"
+                      configurationVersion: "1.0.0"
+                      status: "ACTIVE"
+                      sourceConfigurationId: "config-001"
+                      sourceAppVersion: "2.1.0"
+                    message: "Конфигурация для новой версии приложения успешно создана"
+                    meta:
+                      correlationId: "550e8400-e29b-41d4-a716-446655440000"
+                      timestamp: "2023-01-01T14:00:00Z"
+                  description: |
+                    Успешное создание конфигурации для новой версии приложения. В ответе содержится:
+                    - configurationId: ID новой конфигурации
+                    - providerId: ID провайдера
+                    - appCode: Системное имя провайдера
+                    - appVersion: Новая версия приложения
+                    - configurationVersion: Версия конфигурации
+                    - status: Статус новой конфигурации (всегда ACTIVE)
+                    - sourceConfigurationId: ID исходной конфигурации
+                    - sourceAppVersion: Версия приложения исходной конфигурации
+        '400':
+          description: "Ошибка валидации данных"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StandardErrorResponse"
+              examples:
+                invalidVersionFormat:
+                  summary: "Некорректный формат версии"
+                  value:
+                    success: false
+                    error:
+                      code: "VALIDATION_ERROR"
+                      message: "Некорректный формат версии приложения"
+                      details:
+                        - field: "newAppVersion"
+                          code: "INVALID_FORMAT"
+                          message: "Версия должна соответствовать формату MAJOR.MINOR.PATCH"
+                          suggestion: "Используйте формат X.Y.Z, где X, Y, Z - неотрицательные целые числа"
+                      requestId: "req-a1b2c3d4"
+                      recommendedAction: "Исправьте формат версии в соответствии с семантическим версионированием"
+                    meta:
+                      correlationId: "550e8400-e29b-41d4-a716-446655440000"
+                      timestamp: "2023-01-01T14:00:00Z"
+                invalidAppCode:
+                  summary: "Некорректное системное имя провайдера"
+                  value:
+                    success: false
+                    error:
+                      code: "VALIDATION_ERROR"
+                      message: "Некорректное системное имя провайдера"
+                      details:
+                        - field: "appCode"
+                          code: "INVALID_FORMAT"
+                          message: "Системное имя должно начинаться с буквы в нижнем регистре, за которой следуют буквы в нижнем регистре, цифры или символы подчеркивания"
+                          suggestion: "Используйте только строчные буквы, цифры и символы подчеркивания. Имя должно начинаться с буквы."
+                      requestId: "req-a1b2c3d4"
+                      recommendedAction: "Исправьте формат системного имени"
+                    meta:
+                      correlationId: "550e8400-e29b-41d4-a716-446655440000"
+                      timestamp: "2023-01-01T14:00:00Z"
+        '401':
+          $ref: "#/components/responses/Unauthorized"
+        '404':
+          description: "Провайдер не найден или отсутствует исходная конфигурация"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StandardErrorResponse"
+              examples:
+                providerNotFound:
+                  summary: "Провайдер не найден"
+                  value:
+                    success: false
+                    error:
+                      code: "RESOURCE_NOT_FOUND"
+                      message: "Провайдер с указанным системным именем не найден"
+                      requestId: "req-a1b2c3d4"
+                      recommendedAction: "Проверьте системное имя провайдера или создайте нового провайдера"
+                    meta:
+                      correlationId: "550e8400-e29b-41d4-a716-446655440000"
+                      timestamp: "2023-01-01T14:00:00Z"
+                noActiveConfiguration:
+                  summary: "Отсутствует активная конфигурация"
+                  value:
+                    success: false
+                    error:
+                      code: "RESOURCE_NOT_FOUND"
+                      message: "Не найдена ни одна активная конфигурация для данного провайдера"
+                      requestId: "req-a1b2c3d4"
+                      recommendedAction: "Создайте конфигурацию провайдера перед обновлением версии"
+                    meta:
+                      correlationId: "550e8400-e29b-41d4-a716-446655440000"
+                      timestamp: "2023-01-01T14:00:00Z"
+        '409':
+          description: "Конфликт при создании конфигурации"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StandardErrorResponse"
+              examples:
+                configAlreadyExists:
+                  summary: "Конфигурация для новой версии уже существует"
+                  value:
+                    success: false
+                    error:
+                      code: "RESOURCE_ALREADY_EXISTS"
+                      message: "Конфигурация для указанной версии приложения уже существует"
+                      details:
+                        - field: "newAppVersion"
+                          code: "CONFIG_EXISTS"
+                          message: "Конфигурация для версии 2.2.0 уже существует и имеет статус ACTIVE"
+                          suggestion: "Используйте существующую конфигурацию или деактивируйте ее перед повторной попыткой"
+                      requestId: "req-a1b2c3d4"
+                      recommendedAction: "Используйте другую версию или обновите существующую конфигурацию"
+                    meta:
+                      correlationId: "550e8400-e29b-41d4-a716-446655440000"
+                      timestamp: "2023-01-01T14:00:00Z"
+                versionDowngrade:
+                  summary: "Попытка создать конфигурацию для более старой версии"
+                  value:
+                    success: false
+                    error:
+                      code: "INVALID_VERSION_SEQUENCE"
+                      message: "Новая версия не может быть ниже существующей активной версии"
+                      details:
+                        - field: "newAppVersion"
+                          code: "VERSION_DOWNGRADE"
+                          message: "Указанная версия 1.9.0 ниже текущей активной версии 2.0.0"
+                          suggestion: "Используйте версию выше 2.0.0"
+                      requestId: "req-a1b2c3d4"
+                      recommendedAction: "Используйте версию выше текущей активной версии"
+                    meta:
+                      correlationId: "550e8400-e29b-41d4-a716-446655440000"
+                      timestamp: "2023-01-01T14:00:00Z"
+        '500':
+          description: "Внутренняя ошибка сервера"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StandardErrorResponse"
+              examples:
+                configurationCopyFailed:
+                  summary: "Ошибка при копировании конфигурации"
+                  value:
+                    success: false
+                    error:
+                      code: "INTERNAL_SERVER_ERROR"
+                      message: "Ошибка при копировании конфигурации для новой версии"
+                      requestId: "req-a1b2c3d4"
+                      recommendedAction: "Повторите запрос позже или обратитесь в службу поддержки"
+                    meta:
+                      correlationId: "550e8400-e29b-41d4-a716-446655440000"
+                      timestamp: "2023-01-01T14:00:00Z"
+        '429':
+          $ref: "#/components/responses/TooManyRequests"
+
+  # КОНФИГУРАЦИИ ТЕНАНТОВ
+  /v1/tenant-configurations:
+    post:
+      tags:
+        - Конфигурации тенантов
+      summary: "Создать конфигурацию провайдера для тенанта"
+      operationId: createTenantConfiguration
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+        - $ref: "#/components/parameters/CorrelationId"
+        - $ref: "#/components/parameters/ExternalTenantId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TenantConfigurationRequest"
+            examples:
+              whatsappTenant:
+                summary: "Создание конфигурации WhatsApp для тенанта"
+                value:
+                  appCode: "whatsapp_provider"
+                  appVersion: "2.1.0"
+                description: |
+                  Запрос на создание конфигурации WhatsApp для тенанта. Необходимо указать:
+                  - appCode: Системное имя провайдера
+                  - appVersion: Версия приложения провайдера
+                  
+                  Идентификатор тенанта передается в заголовке externalTenantId.
+              telegramTenant:
+                summary: "Создание конфигурации Telegram для тенанта"
+                value:
+                  appCode: "telegram_provider"
+                  appVersion: "1.5.0"
+      responses:
+        '201':
+          description: "Конфигурация создана"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StandardResponse"
+              examples:
+                whatsappTenantCreated:
+                  summary: "Успешное создание конфигурации WhatsApp для тенанта"
+                  value:
+                    success: true
+                    data:
+                      configurationId: "config-001"
+                      providerId: "provider-123"
+                      appCode: "whatsapp_provider"
+                      appVersion: "2.1.0"
+                      status: "ACTIVE"
+                      configuredAt: "2023-01-01T12:00:00Z"
+                      updatedAt: "2023-01-01T12:00:00Z"
+                      deactivatedAt: null
+                    message: "Конфигурация успешно создана для тенанта"
+                    meta:
+                      correlationId: "550e8400-e29b-41d4-a716-446655440000"
+                      timestamp: "2023-01-01T12:00:00Z"
+                  description: |
+                    Успешное создание конфигурации возвращает:
+                    - configurationId: Идентификатор созданной конфигурации тенанта
+                    - providerId: Идентификатор провайдера
+                    - appCode: Системное имя провайдера
+                    - appVersion: Версия приложения провайдера
+                    - status: Статус конфигурации (всегда ACTIVE при создании)
+                    - configuredAt: Дата и время создания конфигурации
+                    - updatedAt: Дата и время последнего обновления (совпадает с configuredAt при создании)
+                    - deactivatedAt: Дата и время деактивации (null для активных конфигураций)
+                telegramTenantCreated:
+                  summary: "Успешное создание конфигурации Telegram для тенанта"
+                  value:
+                    success: true
+                    data:
+                      configurationId: "config-002"
+                      providerId: "provider-456"
+                      appCode: "telegram_provider"
+                      appVersion: "1.5.0"
+                      status: "ACTIVE"
+                      configuredAt: "2023-01-01T12:05:00Z"
+                      updatedAt: "2023-01-01T12:05:00Z"
+                      deactivatedAt: null
+                    message: "Конфигурация успешно создана для тенанта"
+                    meta:
+                      correlationId: "550e8400-e29b-41d4-a716-446655440001"
+                      timestamp: "2023-01-01T12:05:00Z"
+        '400':
+          $ref: "#/components/responses/BadRequest"
+        '401':
+          $ref: "#/components/responses/Unauthorized"
+        '409':
+          $ref: "#/components/responses/Conflict"
+        '429':
+          $ref: "#/components/responses/TooManyRequests"
+    
+    patch:
+      tags:
+        - Конфигурации тенантов
+      summary: "Обновить конфигурацию провайдера для тенанта"
+      operationId: updateTenantConfiguration
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+        - $ref: "#/components/parameters/CorrelationId"
+        - $ref: "#/components/parameters/ExternalTenantId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TenantConfigurationUpdateRequest"
+            examples:
+              whatsappTenantUpdate:
+                summary: "Обновление конфигурации WhatsApp для тенанта"
+                value:
+                  appCode: "whatsapp_provider"
+                  appVersion: "2.2.0"
+                description: |
+                  Запрос на обновление версии приложения WhatsApp для тенанта:
+                  - appCode: Системное имя провайдера
+                  - appVersion: Новая версия приложения провайдера
+                  
+                  Идентификатор тенанта передается в заголовке externalTenantId.
+              telegramTenantUpdate:
+                summary: "Обновление конфигурации Telegram для тенанта"
+                value:
+                  appCode: "telegram_provider"
+                  appVersion: "1.6.0"
+      responses:
+        '200':
+          description: "Конфигурация обновлена"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StandardResponse"
+              examples:
+                whatsappTenantUpdated:
+                  summary: "Успешное обновление конфигурации WhatsApp для тенанта"
+                  value:
+                    success: true
+                    data:
+                      configurationId: "config-001"
+                      providerId: "provider-123"
+                      appCode: "whatsapp_provider"
+                      appVersion: "2.2.0"
+                      status: "ACTIVE"
+                      configuredAt: "2023-01-01T12:00:00Z"
+                      updatedAt: "2023-01-01T13:00:00Z"
+                      deactivatedAt: null
+                    message: "Конфигурация успешно обновлена для тенанта"
+                    meta:
+                      correlationId: "550e8400-e29b-41d4-a716-446655440002"
+                      timestamp: "2023-01-01T13:00:00Z"
+                  description: |
+                    Успешное обновление конфигурации возвращает:
+                    - configurationId: Идентификатор обновленной конфигурации тенанта
+                    - providerId: Идентификатор провайдера
+                    - appCode: Системное имя провайдера
+                    - appVersion: Новая версия приложения провайдера
+                    - status: Статус конфигурации
+                    - configuredAt: Исходная дата создания конфигурации
+                    - updatedAt: Дата и время обновления
+                    - deactivatedAt: Дата и время деактивации (null для активных конфигураций)
+        '400':
+          $ref: "#/components/responses/BadRequest"
+        '401':
+          $ref: "#/components/responses/Unauthorized"
+        '404':
+          $ref: "#/components/responses/NotFound"
+        '429':
+          $ref: "#/components/responses/TooManyRequests"
+  
+    delete:
+      tags:
+        - Конфигурации тенантов
+      summary: "Удалить конфигурацию провайдера для тенанта"
+      operationId: deleteTenantConfiguration
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+        - $ref: "#/components/parameters/CorrelationId"
+        - $ref: "#/components/parameters/ExternalTenantId"
+        - name: appCode
+          in: query
+          required: true
+          description: "Системное имя провайдера"
+          schema:
+            type: string
+            pattern: "^[a-z][a-z0-9_]{2,49}$"
+            example: "whatsapp_provider"
+      responses:
+        '204':
+          description: "Конфигурация удалена"
+        '401':
+          $ref: "#/components/responses/Unauthorized"
+        '404':
+          $ref: "#/components/responses/NotFound"
+        '429':
+          $ref: "#/components/responses/TooManyRequests"

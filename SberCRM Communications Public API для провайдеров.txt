@@ -1,0 +1,1514 @@
+openapi: 3.0.3
+info:
+  title: "SberCRM Communications Public API для провайдеров"
+  version: "1.0.0"
+  description: |
+    Публичный API для внешних провайдеров, интегрирующихся с модулем коммуникаций SberCRM.
+    Поддерживает работу с сообщениями, чатами, вебхуками и массовыми операциями.
+    
+    **Важно:**
+    - Система не поддерживает форматирование текста сообщения. Текст будет сохранен в том виде, в котором был передан (со всеми специальными символами).
+    - Все идентификаторы (messageId, chatId, memberId и т.д.) - это идентификаторы в системе провайдера, а не в SberCRM.
+    
+tags:
+  - name: "Каналы"
+    description: "Подключение и отключение каналов коммуникаций"
+  - name: "Чаты"
+    description: "Работа с чатами и участниками"
+  - name: "Сообщения"
+    description: "Работа с сообщениями"
+  - name: "Вебхуки"
+    description: "Управление вебхуками для уведомлений"
+  - name: "Массовые операции"
+    description: "Массовые операции с сообщениями"
+    
+components:
+  securitySchemes:
+    ClientAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: "JWT-токен провайдера из личного кабинета (срок действия 30 дней)"
+      
+  parameters:
+    ClientId:
+      name: "X-Client-ID"
+      in: header
+      required: true
+      description: "Идентификатор клиента в CRM"
+      schema:
+        type: string
+        example: "client-123"
+        
+    MessageId:
+      name: messageId
+      in: path
+      required: true
+      description: "Идентификатор сообщения в системе провайдера"
+      schema:
+        type: string
+        example: "msg-123456"
+        
+    ChatId:
+      name: chatId
+      in: path
+      required: true
+      description: "Идентификатор чата в системе провайдера"
+      schema:
+        type: string
+        example: "chat-123456"
+        
+    ChannelId:
+      name: channelId
+      in: path
+      required: true
+      description: "Идентификатор канала в системе провайдера"
+      schema:
+        type: string
+        example: "telegram-001"
+      
+  schemas:
+    # Базовая схема ответа
+    BaseResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          description: "Флаг успешного выполнения"
+        meta:
+          type: object
+          properties:
+            timestamp:
+              type: string
+              format: date-time
+              description: "Время выполнения запроса"
+              example: "2023-01-01T12:00:00Z"
+          required: [timestamp]
+      required: [success, meta]
+    
+    # Общие схемы
+    ErrorDetail:
+      type: object
+      description: "Детали ошибки для поля"
+      properties:
+        field:
+          type: string
+          description: "Имя поля с ошибкой"
+          example: "email"
+        code:
+          type: string
+          description: "Код ошибки"
+          example: "INVALID_FORMAT"
+        message:
+          type: string
+          description: "Описание ошибки"
+          example: "Email должен быть в формате user@example.com"
+        suggestion:
+          type: string
+          nullable: true
+          description: "Рекомендация по исправлению"
+          example: "Укажите корректный email в формате example@domain.com"
+      required: [code, message]
+    
+    StandardErrorResponse:
+      allOf:
+        - $ref: "#/components/schemas/BaseResponse"
+        - type: object
+          properties:
+            success:
+              example: false
+            error:
+              type: object
+              properties:
+                code:
+                  type: string
+                  description: "Код ошибки"
+                  enum:
+                    - INVALID_REQUEST           # Общая ошибка валидации
+                    - VALIDATION_ERROR          # Ошибка валидации полей
+                    - RESOURCE_NOT_FOUND        # Ресурс не найден
+                    - RESOURCE_ALREADY_EXISTS   # Ресурс уже существует
+                    - RESOURCE_CONFLICT         # Конфликт ресурсов
+                    - UNAUTHORIZED              # Не авторизован
+                    - FORBIDDEN                 # Недостаточно прав
+                    - INTERNAL_ERROR            # Внутренняя ошибка
+                    - RATE_LIMIT_EXCEEDED       # Превышен лимит запросов
+                  example: "INVALID_REQUEST"
+                message:
+                  type: string
+                  description: "Сообщение об ошибке"
+                  example: "Запрос содержит некорректные данные"
+                details:
+                  type: array
+                  description: "Подробности ошибки"
+                  items:
+                    $ref: "#/components/schemas/ErrorDetail"
+                requestId:
+                  type: string
+                  description: "Идентификатор запроса"
+                  example: "req-a1b2c3d4"
+                recommendedAction:
+                  type: string
+                  nullable: true
+                  description: "Рекомендуемое действие"
+                  example: "Проверьте формат указанных полей и повторите запрос"
+              required: [code, message, requestId]
+          required: [error]
+      
+    StandardResponse:
+      allOf:
+        - $ref: "#/components/schemas/BaseResponse"
+        - type: object
+          properties:
+            success:
+              example: true
+            data:
+              type: object
+              nullable: true
+              description: "Данные ответа"
+            message:
+              type: string
+              description: "Информационное сообщение"
+              example: "Операция выполнена успешно"
+          required: [message]
+      
+    # Сущности системы
+    ChatMember:
+      type: object
+      description: "Участник чата"
+      properties:
+        id:
+          type: string
+          description: "ID участника в системе провайдера"
+          example: "user-123"
+        name:
+          type: string
+          description: "Имя участника"
+          example: "Иван Иванов"
+        username:
+          type: string
+          nullable: true
+          description: "Имя пользователя"
+          example: "ivanov"
+        email:
+          type: string
+          format: email
+          nullable: true
+          description: "Email"
+          example: "ivanov@example.com"
+        phone:
+          type: string
+          pattern: "^(\\+?[1-9]\\d{1,14})$"
+          nullable: true
+          description: "Телефон (E.164)"
+          example: "+79001234567"
+        avatarUrl:
+          type: string
+          format: uri
+          nullable: true
+          description: "URL аватара"
+          example: "https://example.com/avatars/123.jpg"
+      required: [id, name]
+      anyOf:
+        - required: [username]
+        - required: [email]
+        - required: [phone]
+      
+    ChatRequest:
+      type: object
+      description: "Информация о чате"
+      properties:
+        chatId:
+          type: string
+          description: "ID чата в системе провайдера"
+          example: "chat-123456"
+        channel:
+          type: string
+          description: "ID канала в системе провайдера"
+          example: "telegram"
+        name:
+          type: string
+          description: "Название чата"
+          example: "Поддержка клиента"
+        type:
+          type: string
+          enum: [personal, group]
+          description: "Тип чата"
+          example: "personal"
+        members:
+          type: array
+          description: "Участники чата"
+          items:
+            $ref: "#/components/schemas/ChatMember"
+          minItems: 2
+      required: [chatId, channel, type, members, name]
+    
+    ChatUpdateRequest:
+      type: object
+      description: "Запрос на обновление чата"
+      properties:
+        name:
+          type: string
+          description: "Новое название чата"
+          example: "Техническая поддержка"
+        members:
+          type: array
+          description: "Обновленный список участников чата (только для group чатов)"
+          items:
+            $ref: "#/components/schemas/ChatMember"
+          minItems: 2
+      anyOf:
+        - required: [name]
+        - required: [members]
+    
+    Attachment:
+      type: object
+      description: "Файловое вложение"
+      properties:
+        name:
+          type: string
+          description: "Имя файла"
+          example: "document.pdf"
+        fileExt:
+          type: string
+          description: "Расширение файла"
+          example: "pdf"
+        size:
+          type: integer
+          description: "Размер в байтах"
+          maximum: 20971520 # 20 МБ
+          example: 1048576
+        link:
+          type: string
+          format: uri
+          description: "URL файла"
+          example: "https://cdn.provider.com/document.pdf"
+      required: [name, size, link, fileExt]
+      
+    MessageBase:
+      type: object
+      description: "Базовая информация о сообщении"
+      properties:
+        messageId:
+          type: string
+          description: "ID сообщения в системе провайдера"
+          example: "msg-123456"
+        chatId:
+          type: string
+          description: "ID чата в системе провайдера"
+          example: "chat-123456"
+        type:
+          type: string
+          enum: [text, file]
+          description: "Тип сообщения"
+          example: "text"
+        sentAt:
+          type: string
+          format: date-time
+          description: "Время отправки"
+          example: "2023-01-01T12:00:00Z"
+        senderId:
+          type: string
+          description: "ID отправителя в системе провайдера"
+          example: "user-123"
+      required: [messageId, chatId, type, sentAt, senderId]
+      
+    TextMessageRequest:
+      description: "Текстовое сообщение"
+      allOf:
+        - $ref: "#/components/schemas/MessageBase"
+        - type: object
+          properties:
+            type:
+              enum: [text]
+              description: "Тип: текст"
+            content:
+              type: string
+              description: "Текст сообщения. Система не поддерживает форматирование, текст будет сохранен как есть."
+              maxLength: 4000
+              example: "Привет, как дела?"
+          required: [content]
+      
+    FileMessageRequest:
+      description: "Сообщение с файлом"
+      allOf:
+        - $ref: "#/components/schemas/MessageBase"
+        - type: object
+          properties:
+            type:
+              enum: [file]
+              description: "Тип: файл"
+            content:
+              type: string
+              description: "Текст сообщения, сопровождающий файл. Система не поддерживает форматирование, текст будет сохранен как есть."
+              maxLength: 4000
+              example: "Высылаю документ по нашему вопросу"
+            attachment:
+              $ref: "#/components/schemas/Attachment"
+          required: [attachment]
+      
+    MessageRequest:
+      description: "Запрос создания сообщения"
+      oneOf:
+        - $ref: "#/components/schemas/TextMessageRequest"
+        - $ref: "#/components/schemas/FileMessageRequest"
+      discriminator:
+        propertyName: type
+        mapping:
+          text: "#/components/schemas/TextMessageRequest"
+          file: "#/components/schemas/FileMessageRequest"
+      
+    MessageResponse:
+      description: "Ответ на создание/получение сообщения"
+      allOf:
+        - $ref: "#/components/schemas/MessageRequest"
+        - type: object
+          properties:
+            status:
+              type: string
+              enum: [delivered, failed, cancelled]
+              description: "Статус сообщения"
+              example: "delivered"
+            statusUpdatedAt:
+              type: string
+              format: date-time
+              nullable: true
+              description: "Время обновления статуса"
+              example: "2023-01-01T12:05:00Z"
+            failureReason:
+              type: string
+              nullable: true
+              description: "Причина ошибки"
+              example: "Пользователь заблокировал бота"
+      
+    BulkMessagesRequest:
+      type: object
+      description: "Запрос массовой отправки"
+      properties:
+        messages:
+          type: array
+          description: "Массив сообщений"
+          items:
+            $ref: "#/components/schemas/MessageRequest"
+          minItems: 1
+          maxItems: 100
+      required: [messages]
+      
+    BulkMessagesResponse:
+      allOf:
+        - $ref: "#/components/schemas/StandardResponse"
+        - type: object
+          properties:
+            data:
+              type: object
+              properties:
+                processed:
+                  type: integer
+                  description: "Обработано сообщений"
+                  example: 95
+                failed:
+                  type: integer
+                  description: "Сообщений с ошибками"
+                  example: 5
+                results:
+                  type: array
+                  description: "Результаты по сообщениям"
+                  items:
+                    type: object
+                    properties:
+                      messageId:
+                        type: string
+                        description: "ID сообщения"
+                        example: "msg-123456"
+                      success:
+                        type: boolean
+                        description: "Флаг успеха"
+                        example: true
+                      error:
+                        type: object
+                        nullable: true
+                        properties:
+                          code:
+                            type: string
+                            description: "Код ошибки"
+                            example: "VALIDATION_ERROR"
+                          message:
+                            type: string
+                            description: "Сообщение об ошибке"
+                            example: "Ошибка валидации сообщения"
+                          details:
+                            type: array
+                            description: "Подробности об ошибке"
+                            items:
+                              $ref: "#/components/schemas/ErrorDetail"
+                          requestId:
+                            type: string
+                            description: "Идентификатор запроса"
+                            example: "req-a1b2c3d4"
+                          recommendedAction:
+                            type: string
+                            nullable: true
+                            description: "Рекомендуемое действие"
+                            example: "Проверьте формат сообщения и повторите запрос"
+                        required: [code, message]
+                        description: "Информация об ошибке"
+                required: [processed, failed, results]
+      
+    UpdateMessageStatusRequest:
+      type: object
+      description: "Обновление статуса сообщения"
+      properties:
+        status:
+          type: string
+          enum: [delivered, failed, cancelled]
+          description: "Новый статус"
+          example: "delivered"
+        reason:
+          type: string
+          nullable: true
+          description: "Причина изменения"
+          example: "Не доставлено из-за ограничений"
+        statusTimestamp:
+          type: string
+          format: date-time
+          nullable: true
+          description: "Время изменения статуса"
+          example: "2023-01-01T12:05:00Z"
+      required: [status]
+      
+    UpdateMessageContentRequest:
+      type: object
+      description: "Обновление текста сообщения"
+      properties:
+        content:
+          type: string
+          description: "Новый текст. Система не поддерживает форматирование, текст будет сохранен как есть."
+          maxLength: 4000
+          example: "Обновленный текст сообщения"
+        updatedAt:
+          type: string
+          format: date-time
+          description: "Время обновления"
+          example: "2023-01-01T12:10:00Z"
+      required: [content, updatedAt]
+      
+    MarkChatSeenRequest:
+      type: object
+      description: "Отметка чата как прочитанного"
+      properties:
+        seenAt:
+          type: string
+          format: date-time
+          nullable: true
+          description: "Время прочтения"
+          example: "2023-01-01T12:15:00Z"
+      
+    WebhookRequest:
+      type: object
+      description: "Запрос на установку вебхука"
+      properties:
+        webhookUrl:
+          type: string
+          format: uri
+          description: "URL для уведомлений"
+          example: "https://provider.example.com/api/webhook"
+        secret:
+          type: string
+          nullable: true
+          description: "Секрет для подписи"
+          minLength: 16
+          example: "verySecretKey123456"
+        events:
+          type: array
+          nullable: true
+          description: |
+            Типы событий для подписки. Если не указано, подписка будет на все события.
+            Доступные типы событий:
+            - messageNew - Новое сообщение
+            - messageUpdated - Обновление сообщения
+            - messageStatus - Изменение статуса сообщения
+            - chatSeen - Отметка о прочтении чата
+          items:
+            type: string
+            enum: [messageNew, messageUpdated, messageStatus, chatSeen]
+            example: "messageNew"
+      required: [webhookUrl]
+      
+    ChannelConnectionRequest:
+      type: object
+      description: "Запрос на подключение канала"
+      properties:
+        channelId:
+          type: string
+          description: "ID канала в системе провайдера"
+          example: "telegram-001"
+        channelCode:
+          type: string
+          description: "Код типа канала"
+          enum: [telegram, whatsapp, viber, vk, facebook, instagram, email, sms, custom]
+          example: "telegram"
+        channelName:
+          type: string
+          description: "Название канала"
+          minLength: 1
+          maxLength: 100
+          example: "Telegram Bot API"
+        phone:
+          type: string
+          pattern: "^(\\+?[1-9]\\d{1,14})$"
+          nullable: true
+          description: "Телефон для канала"
+          example: "+79001234567"
+        email:
+          type: string
+          format: email
+          nullable: true
+          description: "Email для канала"
+          example: "bot@example.com"
+        username:
+          type: string
+          nullable: true
+          description: "Имя пользователя"
+          example: "support_bot"
+        additionalInfo:
+          type: object
+          nullable: true
+          description: "Дополнительная информация"
+          additionalProperties: true
+          example:
+            description: "Основной канал для уведомлений"
+            botToken: "123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11"
+      required: [channelId, channelCode, channelName]
+      anyOf:
+        - required: [phone]
+        - required: [email]
+        - required: [username]
+  
+  responses:
+    BadRequest:
+      description: "Некорректный запрос"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/StandardErrorResponse"
+          examples:
+            validationError:
+              summary: "Ошибка валидации"
+              value:
+                success: false
+                error:
+                  code: "VALIDATION_ERROR"
+                  message: "Запрос содержит некорректные данные"
+                  details:
+                    - field: "email"
+                      code: "INVALID_FORMAT"
+                      message: "Email должен быть в формате user@example.com"
+                      suggestion: "Укажите email в формате user@example.com"
+                  requestId: "req-a1b2c3d4"
+                  recommendedAction: "Проверьте формат указанных полей и повторите запрос"
+                meta:
+                  timestamp: "2023-01-01T12:00:00Z"
+            contentTooLong:
+              summary: "Слишком длинное сообщение"
+              value:
+                success: false
+                error:
+                  code: "VALIDATION_ERROR"
+                  message: "Слишком длинное сообщение"
+                  details:
+                    - field: "content"
+                      code: "CONTENT_TOO_LONG"
+                      message: "Текст сообщения не должен превышать 4000 символов"
+                      suggestion: "Сократите текст сообщения до 4000 символов"
+                  requestId: "req-a1b2c3d4"
+                  recommendedAction: "Сократите текст сообщения и повторите запрос"
+                meta:
+                  timestamp: "2023-01-01T12:00:00Z"
+            invalidAttachment:
+              summary: "Некорректное вложение"
+              value:
+                success: false
+                error:
+                  code: "VALIDATION_ERROR"
+                  message: "Некорректное вложение"
+                  details:
+                    - field: "attachment.link"
+                      code: "INVALID_URL"
+                      message: "Указан некорректный URL файла"
+                      suggestion: "Укажите доступный HTTP или HTTPS URL"
+                    - field: "attachment.size"
+                      code: "FILE_TOO_LARGE"
+                      message: "Размер файла превышает 20 МБ"
+                      suggestion: "Уменьшите размер файла до 20 МБ"
+                  requestId: "req-a1b2c3d4"
+                  recommendedAction: "Исправьте указанные проблемы вложения и повторите запрос"
+                meta:
+                  timestamp: "2023-01-01T12:00:00Z"
+            
+    Unauthorized:
+      description: "Не авторизован"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/StandardErrorResponse"
+          examples:
+            invalidToken:
+              summary: "Недействительный токен"
+              value:
+                success: false
+                error:
+                  code: "UNAUTHORIZED"
+                  message: "Недействительный токен авторизации"
+                  requestId: "req-a1b2c3d4"
+                  recommendedAction: "Обновите токен авторизации в личном кабинете"
+                meta:
+                  timestamp: "2023-01-01T12:00:00Z"
+            expiredToken:
+              summary: "Истекший токен"
+              value:
+                success: false
+                error:
+                  code: "UNAUTHORIZED"
+                  message: "Срок действия токена истек"
+                  requestId: "req-a1b2c3d4"
+                  recommendedAction: "Получите новый токен в личном кабинете"
+                meta:
+                  timestamp: "2023-01-01T12:00:00Z"
+            
+    Forbidden:
+      description: "Доступ запрещен"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/StandardErrorResponse"
+          examples:
+            accessDenied:
+              summary: "Недостаточно прав"
+              value:
+                success: false
+                error:
+                  code: "FORBIDDEN"
+                  message: "Недостаточно прав для операции"
+                  requestId: "req-a1b2c3d4"
+                  recommendedAction: "Обратитесь к администратору для получения необходимых прав"
+                meta:
+                  timestamp: "2023-01-01T12:00:00Z"
+            
+    NotFound:
+      description: "Ресурс не найден"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/StandardErrorResponse"
+          examples:
+            messageNotFound:
+              summary: "Сообщение не найдено"
+              value:
+                success: false
+                error:
+                  code: "RESOURCE_NOT_FOUND"
+                  message: "Сообщение не найдено"
+                  details:
+                    - field: "messageId"
+                      code: "INVALID_ID"
+                      message: "Сообщение с указанным ID не найдено"
+                  requestId: "req-a1b2c3d4"
+                  recommendedAction: "Проверьте ID сообщения и повторите запрос"
+                meta:
+                  timestamp: "2023-01-01T12:00:00Z"
+            chatNotFound:
+              summary: "Чат не найден"
+              value:
+                success: false
+                error:
+                  code: "RESOURCE_NOT_FOUND"
+                  message: "Чат не найден"
+                  details:
+                    - field: "chatId"
+                      code: "INVALID_ID"
+                      message: "Чат с указанным ID не найден"
+                  requestId: "req-a1b2c3d4"
+                  recommendedAction: "Проверьте ID чата и повторите запрос"
+                meta:
+                  timestamp: "2023-01-01T12:00:00Z"
+            
+    Conflict:
+      description: "Конфликт данных"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/StandardErrorResponse"
+          examples:
+            duplicateMessage:
+              summary: "Сообщение уже существует"
+              value:
+                success: false
+                error:
+                  code: "RESOURCE_CONFLICT"
+                  message: "Сообщение с указанным ID уже существует"
+                  requestId: "req-a1b2c3d4"
+                  recommendedAction: "Используйте уникальный ID сообщения"
+                meta:
+                  timestamp: "2023-01-01T12:00:00Z"
+            
+    InternalError:
+      description: "Внутренняя ошибка сервера"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/StandardErrorResponse"
+          examples:
+            serverError:
+              summary: "Внутренняя ошибка"
+              value:
+                success: false
+                error:
+                  code: "INTERNAL_ERROR"
+                  message: "Произошла внутренняя ошибка"
+                  requestId: "req-a1b2c3d4"
+                  recommendedAction: "Повторите запрос позже или обратитесь в поддержку"
+                meta:
+                  timestamp: "2023-01-01T12:00:00Z"
+            
+    TooManyRequests:
+      description: "Слишком много запросов"
+      headers:
+        Retry-After:
+          description: "Секунд до следующей попытки"
+          schema:
+            type: integer
+            example: 60
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/StandardErrorResponse"
+          examples:
+            rateLimitExceeded:
+              summary: "Превышен лимит запросов"
+              value:
+                success: false
+                error:
+                  code: "RATE_LIMIT_EXCEEDED"
+                  message: "Превышен лимит запросов"
+                  requestId: "req-a1b2c3d4"
+                  recommendedAction: "Повторите запрос через указанное в заголовке Retry-After время"
+                meta:
+                  timestamp: "2023-01-01T12:00:00Z"
+            
+security:
+  - ClientAuth: []
+  
+paths:
+  # API каналов
+  /channels:
+    post:
+      tags:
+        - Каналы
+      summary: "Подключить канал"
+      description: "Создает новый канал коммуникации для клиента"
+      operationId: connectChannel
+      parameters:
+        - $ref: "#/components/parameters/ClientId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ChannelConnectionRequest"
+            example: {
+              "channelId": "telegram-001",
+              "channelCode": "telegram",
+              "channelName": "Telegram Bot API",
+              "username": "support_bot",
+              "additionalInfo": {
+                "description": "Основной канал для уведомлений",
+                "botToken": "123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11"
+              }
+            }
+      responses:
+        '201':
+          description: "Канал подключен"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StandardResponse"
+              example: {
+                "success": true,
+                "message": "Канал успешно подключен",
+                "meta": {
+                  "timestamp": "2023-01-01T12:00:00Z"
+                }
+              }
+        '400':
+          $ref: "#/components/responses/BadRequest"
+        '401':
+          $ref: "#/components/responses/Unauthorized"
+        '403':
+          $ref: "#/components/responses/Forbidden"
+        '409':
+          $ref: "#/components/responses/Conflict"
+        '500':
+          $ref: "#/components/responses/InternalError"
+          
+  /channels/{channelId}:
+    delete:
+      tags:
+        - Каналы
+      summary: "Отключить канал"
+      description: "Отключает существующий канал коммуникации"
+      operationId: disconnectChannel
+      parameters:
+        - $ref: "#/components/parameters/ChannelId"
+        - $ref: "#/components/parameters/ClientId"
+      responses:
+        '200':
+          description: "Канал отключен"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StandardResponse"
+              example: {
+                "success": true,
+                "message": "Канал успешно отключен",
+                "meta": {
+                  "timestamp": "2023-01-01T12:00:00Z"
+                }
+              }
+        '401':
+          $ref: "#/components/responses/Unauthorized"
+        '403':
+          $ref: "#/components/responses/Forbidden"
+        '404':
+          $ref: "#/components/responses/NotFound"
+        '500':
+          $ref: "#/components/responses/InternalError"
+          
+  # API чатов
+  /chats:
+    post:
+      tags:
+        - Чаты
+      summary: "Создать чат"
+      description: "Создает новый чат"
+      operationId: createChat
+      parameters:
+        - $ref: "#/components/parameters/ClientId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ChatRequest"
+            example: {
+              "chatId": "chat-123456",
+              "channel": "telegram",
+              "name": "Поддержка клиента",
+              "type": "personal",
+              "members": [
+                {
+                  "id": "user-123",
+                  "name": "Иван Иванов",
+                  "username": "ivanov"
+                },
+                {
+                  "id": "bot-456",
+                  "name": "Чат-бот поддержки",
+                  "username": "support_bot"
+                }
+              ]
+            }
+      responses:
+        '201':
+          description: "Чат создан"
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/StandardResponse"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/ChatRequest"
+              example: {
+                "success": true,
+                "data": {
+                  "chatId": "chat-123456",
+                  "channel": "telegram",
+                  "name": "Поддержка клиента",
+                  "type": "personal",
+                  "members": [
+                    {
+                      "id": "user-123",
+                      "name": "Иван Иванов",
+                      "username": "ivanov"
+                    },
+                    {
+                      "id": "bot-456",
+                      "name": "Чат-бот поддержки",
+                      "username": "support_bot"
+                    }
+                  ]
+                },
+                "message": "Чат успешно создан",
+                "meta": {
+                  "timestamp": "2023-01-01T12:00:00Z"
+                }
+              }
+        '400':
+          $ref: "#/components/responses/BadRequest"
+        '401':
+          $ref: "#/components/responses/Unauthorized"
+        '403':
+          $ref: "#/components/responses/Forbidden"
+        '409':
+          $ref: "#/components/responses/Conflict"
+        '500':
+          $ref: "#/components/responses/InternalError"
+          
+  /chats/{chatId}:
+    patch:
+      tags:
+        - Чаты
+      summary: "Обновить чат"
+      description: "Обновляет название и/или список участников чата (только для групповых чатов)"
+      operationId: updateChat
+      parameters:
+        - $ref: "#/components/parameters/ChatId"
+        - $ref: "#/components/parameters/ClientId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ChatUpdateRequest"
+            examples:
+              updateName:
+                summary: "Обновление названия чата"
+                value: {
+                  "name": "Техническая поддержка"
+                }
+              updateMembers:
+                summary: "Обновление участников чата"
+                value: {
+                  "members": [
+                    {
+                      "id": "user-123",
+                      "name": "Иван Иванов",
+                      "username": "ivanov"
+                    },
+                    {
+                      "id": "bot-456",
+                      "name": "Чат-бот поддержки",
+                      "username": "support_bot"
+                    },
+                    {
+                      "id": "user-789",
+                      "name": "Петр Петров",
+                      "username": "petrov"
+                    }
+                  ]
+                }
+              updateBoth:
+                summary: "Обновление названия и участников чата"
+                value: {
+                  "name": "Техническая поддержка",
+                  "members": [
+                    {
+                      "id": "user-123",
+                      "name": "Иван Иванов",
+                      "username": "ivanov"
+                    },
+                    {
+                      "id": "bot-456",
+                      "name": "Чат-бот поддержки",
+                      "username": "support_bot"
+                    },
+                    {
+                      "id": "user-789",
+                      "name": "Петр Петров",
+                      "username": "petrov"
+                    }
+                  ]
+                }
+      responses:
+        '200':
+          description: "Чат обновлен"
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/StandardResponse"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/ChatRequest"
+              example: {
+                "success": true,
+                "data": {
+                  "chatId": "chat-123456",
+                  "channel": "telegram",
+                  "name": "Техническая поддержка",
+                  "type": "group",
+                  "members": [
+                    {
+                      "id": "user-123",
+                      "name": "Иван Иванов",
+                      "username": "ivanov"
+                    },
+                    {
+                      "id": "bot-456",
+                      "name": "Чат-бот поддержки",
+                      "username": "support_bot"
+                    },
+                    {
+                      "id": "user-789",
+                      "name": "Петр Петров",
+                      "username": "petrov"
+                    }
+                  ]
+                },
+                "message": "Чат успешно обновлен",
+                "meta": {
+                  "timestamp": "2023-01-01T12:00:00Z"
+                }
+              }
+        '400':
+          $ref: "#/components/responses/BadRequest"
+        '401':
+          $ref: "#/components/responses/Unauthorized"
+        '403':
+          $ref: "#/components/responses/Forbidden"
+        '404':
+          $ref: "#/components/responses/NotFound"
+        '500':
+          $ref: "#/components/responses/InternalError"
+          
+  /chats/{chatId}/seen:
+    post:
+      tags:
+        - Чаты
+      summary: "Отметить чат прочитанным"
+      description: "Отмечает сообщения в чате как прочитанные"
+      operationId: markChatSeen
+      parameters:
+        - $ref: "#/components/parameters/ChatId"
+        - $ref: "#/components/parameters/ClientId"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MarkChatSeenRequest"
+            example: {
+              "seenAt": "2023-01-01T12:20:00Z"
+            }
+      responses:
+        '200':
+          description: "Чат отмечен прочитанным"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StandardResponse"
+              example: {
+                "success": true,
+                "message": "Чат отмечен как прочитанный",
+                "meta": {
+                  "timestamp": "2023-01-01T12:00:00Z"
+                }
+              }
+        '401':
+          $ref: "#/components/responses/Unauthorized"
+        '403':
+          $ref: "#/components/responses/Forbidden"
+        '404':
+          $ref: "#/components/responses/NotFound"
+        '500':
+          $ref: "#/components/responses/InternalError"
+          
+  # API сообщений
+  /messages:
+    post:
+      tags:
+        - Сообщения
+      summary: "Создать сообщение"
+      description: "Создает новое сообщение в чате"
+      operationId: createMessage
+      parameters:
+        - $ref: "#/components/parameters/ClientId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MessageRequest"
+            examples:
+              textMessage:
+                summary: "Текстовое сообщение"
+                value: {
+                  "messageId": "msg-123456",
+                  "chatId": "chat-123456",
+                  "type": "text",
+                  "sentAt": "2023-01-01T12:00:00Z",
+                  "senderId": "user-123",
+                  "content": "Привет! Подскажите, как изменить пароль в личном кабинете?"
+                }
+              fileMessageWithText:
+                summary: "Файловое сообщение с текстом"
+                value: {
+                  "messageId": "msg-234567",
+                  "chatId": "chat-123456",
+                  "type": "file",
+                  "sentAt": "2023-01-01T12:05:00Z",
+                  "senderId": "user-123",
+                  "content": "Вот скриншот с ошибкой",
+                  "attachment": {
+                    "name": "screenshot.png",
+                    "fileExt": "png",
+                    "size": 1048576,
+                    "link": "https://cdn.provider.com/files/screenshot.png"
+                  }
+                }
+              fileMessageWithoutText:
+                summary: "Файловое сообщение без текста"
+                value: {
+                  "messageId": "msg-345678",
+                  "chatId": "chat-123456",
+                  "type": "file",
+                  "sentAt": "2023-01-01T12:10:00Z",
+                  "senderId": "user-123",
+                  "attachment": {
+                    "name": "document.pdf",
+                    "fileExt": "pdf",
+                    "size": 2097152,
+                    "link": "https://cdn.provider.com/files/document.pdf"
+                  }
+                }
+      responses:
+        '201':
+          description: "Сообщение создано"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessageResponse"
+              examples:
+                textMessage:
+                  summary: "Ответ на создание текстового сообщения"
+                  value: {
+                    "messageId": "msg-123456",
+                    "chatId": "chat-123456",
+                    "type": "text",
+                    "sentAt": "2023-01-01T12:00:00Z",
+                    "senderId": "user-123",
+                    "content": "Привет! Подскажите, как изменить пароль в личном кабинете?",
+                    "status": "delivered",
+                    "statusUpdatedAt": "2023-01-01T12:00:01Z"
+                  }
+                fileMessageWithText:
+                  summary: "Ответ на создание файлового сообщения с текстом"
+                  value: {
+                    "messageId": "msg-234567",
+                    "chatId": "chat-123456",
+                    "type": "file",
+                    "sentAt": "2023-01-01T12:05:00Z",
+                    "senderId": "user-123",
+                    "content": "Вот скриншот с ошибкой",
+                    "attachment": {
+                      "name": "screenshot.png",
+                      "fileExt": "png",
+                      "size": 1048576,
+                      "link": "https://cdn.provider.com/files/screenshot.png"
+                    },
+                    "status": "delivered",
+                    "statusUpdatedAt": "2023-01-01T12:05:01Z"
+                  }
+        '400':
+          $ref: "#/components/responses/BadRequest"
+        '401':
+          $ref: "#/components/responses/Unauthorized"
+        '403':
+          $ref: "#/components/responses/Forbidden"
+        '404':
+          $ref: "#/components/responses/NotFound"
+        '500':
+          $ref: "#/components/responses/InternalError"
+          
+  /messages/{messageId}/status:
+    post:
+      tags:
+        - Сообщения
+      summary: "Обновить статус сообщения"
+      description: "Обновляет статус существующего сообщения"
+      operationId: updateMessageStatus
+      parameters:
+        - $ref: "#/components/parameters/MessageId"
+        - $ref: "#/components/parameters/ClientId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateMessageStatusRequest"
+            example: {
+              "status": "cancelled",
+              "statusTimestamp": "2023-01-01T12:10:00Z"
+            }
+      responses:
+        '200':
+          description: "Статус обновлен"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StandardResponse"
+              example: {
+                "success": true,
+                "message": "Статус сообщения обновлен",
+                "meta": {
+                  "timestamp": "2023-01-01T12:00:00Z"
+                }
+              }
+        '400':
+          $ref: "#/components/responses/BadRequest"
+        '401':
+          $ref: "#/components/responses/Unauthorized"
+        '403':
+          $ref: "#/components/responses/Forbidden"
+        '404':
+          $ref: "#/components/responses/NotFound"
+        '500':
+          $ref: "#/components/responses/InternalError"
+          
+  /messages/{messageId}:
+    patch:
+      tags:
+        - Сообщения
+      summary: "Обновить текст сообщения"
+      description: "Обновляет содержимое текстового сообщения"
+      operationId: updateMessageContent
+      parameters:
+        - $ref: "#/components/parameters/MessageId"
+        - $ref: "#/components/parameters/ClientId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateMessageContentRequest"
+            example: {
+              "content": "Обновленный текст сообщения после редактирования",
+              "updatedAt": "2023-01-01T12:15:00Z"
+            }
+      responses:
+        '200':
+          description: "Текст обновлен"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessageResponse"
+              example: {
+                "messageId": "msg-123456",
+                "chatId": "chat-123456",
+                "type": "text",
+                "sentAt": "2023-01-01T12:00:00Z",
+                "senderId": "user-123",
+                "content": "Обновленный текст сообщения после редактирования",
+                "status": "delivered",
+                "statusUpdatedAt": "2023-01-01T12:15:01Z"
+              }
+        '400':
+          $ref: "#/components/responses/BadRequest"
+        '401':
+          $ref: "#/components/responses/Unauthorized"
+        '403':
+          $ref: "#/components/responses/Forbidden"
+        '404':
+          $ref: "#/components/responses/NotFound"
+        '500':
+          $ref: "#/components/responses/InternalError"
+          
+  # API вебхуков
+  /webhooks:
+    post:
+      tags:
+        - Вебхуки
+      summary: "Установить вебхук"
+      description: "Устанавливает URL для получения уведомлений"
+      operationId: setWebhook
+      parameters:
+        - $ref: "#/components/parameters/ClientId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/WebhookRequest"
+            example: {
+              "webhookUrl": "https://provider.example.com/api/webhook",
+              "secret": "verySecretKey123456",
+              "events": ["messageNew", "messageUpdated", "messageStatus"]
+            }
+      responses:
+        '200':
+          description: "Вебхук установлен"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StandardResponse"
+              example: {
+                "success": true,
+                "message": "Вебхук успешно установлен",
+                "meta": {
+                  "timestamp": "2023-01-01T12:00:00Z"
+                }
+              }
+        '400':
+          $ref: "#/components/responses/BadRequest"
+        '401':
+          $ref: "#/components/responses/Unauthorized"
+        '403':
+          $ref: "#/components/responses/Forbidden"
+        '500':
+          $ref: "#/components/responses/InternalError"
+          
+    get:
+      tags:
+        - Вебхуки
+      summary: "Получить информацию о вебхуке"
+      description: "Возвращает текущую конфигурацию вебхука"
+      operationId: getWebhook
+      parameters:
+        - $ref: "#/components/parameters/ClientId"
+      responses:
+        '200':
+          description: "Информация о вебхуке"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StandardResponse"
+              example: {
+                "success": true,
+                "data": {
+                  "webhookUrl": "https://provider.example.com/api/webhook",
+                  "events": ["messageNew", "messageUpdated", "messageStatus"],
+                  "createdAt": "2023-01-01T12:00:00Z",
+                  "updatedAt": "2023-01-02T15:30:00Z",
+                  "lastCalledAt": "2023-01-02T15:45:00Z"
+                },
+                "message": "Информация о вебхуке успешно получена",
+                "meta": {
+                  "timestamp": "2023-01-02T16:00:00Z"
+                }
+              }
+        '401':
+          $ref: "#/components/responses/Unauthorized"
+        '403':
+          $ref: "#/components/responses/Forbidden"
+        '404':
+          $ref: "#/components/responses/NotFound"
+        '500':
+          $ref: "#/components/responses/InternalError"
+          
+    delete:
+      tags:
+        - Вебхуки
+      summary: "Удалить вебхук"
+      description: "Удаляет существующий вебхук"
+      operationId: deleteWebhook
+      parameters:
+        - $ref: "#/components/parameters/ClientId"
+      responses:
+        '200':
+          description: "Вебхук удален"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StandardResponse"
+              example: {
+                "success": true,
+                "message": "Вебхук успешно удален",
+                "meta": {
+                  "timestamp": "2023-01-01T12:00:00Z"
+                }
+              }
+        '401':
+          $ref: "#/components/responses/Unauthorized"
+        '403':
+          $ref: "#/components/responses/Forbidden"
+        '404':
+          $ref: "#/components/responses/NotFound"
+        '500':
+          $ref: "#/components/responses/InternalError"
+          
+  # API массовых операций
+  /bulk/messages:
+    post:
+      tags:
+        - Массовые операции
+      summary: "Пакетная отправка сообщений"
+      description: "Отправляет несколько сообщений (до 100)"
+      operationId: bulkMessages
+      parameters:
+        - $ref: "#/components/parameters/ClientId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BulkMessagesRequest"
+            example: {
+              "messages": [
+                {
+                  "messageId": "msg-123456",
+                  "chatId": "chat-123456",
+                  "type": "text",
+                  "sentAt": "2023-01-01T12:00:00Z",
+                  "senderId": "bot-456",
+                  "content": "Уведомление о новой акции"
+                },
+                {
+                  "messageId": "msg-123457",
+                  "chatId": "chat-123457",
+                  "type": "text",
+                  "sentAt": "2023-01-01T12:00:00Z",
+                  "senderId": "bot-456",
+                  "content": "Уведомление о новой акции"
+                }
+              ]
+            }
+      responses:
+        '200':
+          description: "Пакет обработан"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BulkMessagesResponse"
+              example: {
+                "success": true,
+                "data": {
+                  "processed": 2,
+                  "failed": 0,
+                  "results": [
+                    {
+                      "messageId": "msg-123456",
+                      "success": true
+                    },
+                    {
+                      "messageId": "msg-123457",
+                      "success": true
+                    }
+                  ]
+                },
+                "message": "Пакет сообщений успешно обработан",
+                "meta": {
+                  "timestamp": "2023-01-01T12:00:00Z"
+                }
+              }
+        '400':
+          $ref: "#/components/responses/BadRequest"
+        '401':
+          $ref: "#/components/responses/Unauthorized"
+        '403':
+          $ref: "#/components/responses/Forbidden"
+        '429':
+          $ref: "#/components/responses/TooManyRequests"
+        '500':
+          $ref: "#/components/responses/InternalError"
