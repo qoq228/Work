@@ -1,0 +1,668 @@
+openapi: 3.0.3
+info:
+  title: "Внутреннее API маркетплейса для работы с конфигурациями приложений провайдеров"
+  version: "1.0.0"
+  description: |
+    Внутреннее API маркетплейса SberCRM для работы с конфигурациями приложений провайдеров коммуникаций.
+    Обеспечивает создание, получение и обновление конфигураций в рамках маркетплейса.
+tags:
+  - name: "Конфигурации провайдеров"
+    description: "Управление конфигурациями провайдеров в маркетплейсе"
+security:
+  - BearerAuth: []
+components:
+  parameters:
+    AppCode:
+      name: appCode
+      in: query
+      required: true
+      description: "Системное имя провайдера. Должно соответствовать системному имени приложения в маркетплейсе."
+      schema:
+        type: string
+        minLength: 3
+        maxLength: 50
+        pattern: "^[a-z][a-z0-9_]{2,49}$"
+        example: "whatsapp_provider"
+    AppVersion:
+      name: appVersion
+      in: query
+      required: true
+      description: "Версия приложения провайдера."
+      schema:
+        type: string
+        pattern: "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+        example: "2.1.0"
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: "JWT токен для аутентификации. Срок действия - 24 часа. После истечения срока действия необходимо запросить новый токен."
+  schemas:
+    ErrorDetail:
+      type: object
+      properties:
+        field:
+          type: string
+          description: "Название поля, содержащего ошибку"
+          example: "configurationVersion"
+        code:
+          type: string
+          description: "Код ошибки для данного поля"
+          example: "INVALID_FORMAT"
+        message:
+          type: string
+          description: "Описание ошибки для данного поля"
+          example: "Версия должна соответствовать формату MAJOR.MINOR.PATCH"
+        suggestion:
+          type: string
+          nullable: true
+          description: "Рекомендация по исправлению ошибки"
+          example: "Используйте формат X.Y.Z, где X, Y, Z - неотрицательные целые числа"
+      required: [code, message]
+    
+    # Базовая схема для всех ответов
+    BaseResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          description: "Флаг успешного выполнения"
+        meta:
+          type: object
+          properties:
+            timestamp:
+              type: string
+              format: date-time
+              description: "Время выполнения запроса"
+              example: "2023-01-01T12:00:00Z"
+          required: [timestamp]
+      required: [success, meta]
+
+    # Схема для ответов с ошибкой
+    StandardErrorResponse:
+      allOf:
+        - $ref: "#/components/schemas/BaseResponse"
+        - type: object
+          properties:
+            success:
+              example: false
+            error:
+              type: object
+              properties:
+                code:
+                  type: string
+                  description: "Код ошибки"
+                  example: "INVALID_REQUEST"
+                  enum:
+                    - INVALID_REQUEST           # Общая ошибка валидации запроса
+                    - VALIDATION_ERROR          # Ошибка валидации полей
+                    - RESOURCE_NOT_FOUND        # Ресурс не найден
+                    - RESOURCE_ALREADY_EXISTS   # Ресурс уже существует
+                    - RESOURCE_CONFLICT         # Конфликт при работе с ресурсом
+                    - DEPENDENCY_ERROR          # Ошибка зависимостей между ресурсами
+                    - AUTHORIZATION_ERROR       # Ошибка авторизации
+                    - AUTHENTICATION_ERROR      # Ошибка аутентификации
+                    - TOKEN_EXPIRED             # Истёк срок действия токена
+                    - INTERNAL_SERVER_ERROR     # Внутренняя ошибка сервера
+                    - SERVICE_UNAVAILABLE       # Сервис недоступен
+                    - CONFIGURATION_LOCKED      # Конфигурация заблокирована
+                    - VERSION_CONFLICT          # Конфликт версий
+                    - INVALID_VERSION_SEQUENCE  # Неверная последовательность версий
+                    - INVALID_PROVIDER_STATE    # Некорректное состояние провайдера
+                message:
+                  type: string
+                  description: "Сообщение об ошибке"
+                  example: "Запрос содержит некорректные данные"
+                details:
+                  type: array
+                  items:
+                    $ref: "#/components/schemas/ErrorDetail"
+                  description: "Подробная информация об ошибках в полях запроса"
+                requestId:
+                  type: string
+                  description: "Идентификатор запроса"
+                  example: "req-a1b2c3d4"
+                recommendedAction:
+                  type: string
+                  nullable: true
+                  description: "Рекомендуемое действие для исправления ошибки"
+                  example: "Повторите попытку через 60 секунд или обратитесь в службу поддержки"
+              required: [code, message]
+          required: [error]
+    
+    # Схема для успешных ответов
+    StandardResponse:
+      allOf:
+        - $ref: "#/components/schemas/BaseResponse"
+        - type: object
+          properties:
+            success:
+              example: true
+            data:
+              type: object
+              nullable: true
+              description: "Данные ответа"
+            message:
+              type: string
+              description: "Информационное сообщение"
+              example: "Операция выполнена успешно"
+          required: [message]
+    
+    # Эндпоинты провайдера
+    ProviderEndpoints:
+      type: object
+      properties:
+        sendMessage:
+          type: string
+          format: uri
+          description: "Эндпоинт отправки сообщения. Используется для отправки нового сообщения клиенту."
+          pattern: "^https?://.*$"
+          minLength: 10
+          maxLength: 2083
+          example: "https://provider.example.com/api/sendMessage"
+        updateMessageContent:
+          type: string
+          format: uri
+          description: "Эндпоинт обновления содержимого сообщения. Используется для изменения текста уже отправленного сообщения."
+          pattern: "^https?://.*$"
+          minLength: 10
+          maxLength: 2083
+          example: "https://provider.example.com/api/updateMessageContent"
+        updateMessageStatus:
+          type: string
+          format: uri
+          description: "Эндпоинт обновления статуса сообщения. Используется для информирования провайдера о смене статуса сообщения (доставлено, прочитано и т.д.)."
+          pattern: "^https?://.*$"
+          minLength: 10
+          maxLength: 2083
+          example: "https://provider.example.com/api/updateMessageStatus"
+        markChatRead:
+          type: string
+          format: uri
+          description: "Эндпоинт отметки о прочтении чата. Используется для информирования провайдера о прочтении всех сообщений в чате."
+          pattern: "^https?://.*$"
+          minLength: 10
+          maxLength: 2083
+          example: "https://provider.example.com/api/markChatRead"
+        disconnect:
+          type: string
+          format: uri
+          description: "Эндпоинт отключения. Используется при отключении приложения провайдера в маркетплейсе."
+          pattern: "^https?://.*$"
+          minLength: 10
+          maxLength: 2083
+          example: "https://provider.example.com/api/disconnect"
+        getChannels:
+          type: string
+          format: uri
+          description: "Эндпоинт получения каналов. Используется для получения списка доступных каналов связи клиента. Одноканальные провайдеры (Авито, Viber, ВКонтакте и другие) должны поддерживать этот эндпоинт, но могут возвращать пустой список каналов."
+          pattern: "^https?://.*$"
+          minLength: 10
+          maxLength: 2083
+          example: "https://provider.example.com/api/getChannels"
+        # Опциональные эндпоинты
+        setWebhook:
+          type: string
+          format: uri
+          description: "Эндпоинт установки вебхука. Используется для настройки получения уведомлений от провайдера."
+          pattern: "^https?://.*$"
+          minLength: 10
+          maxLength: 2083
+          example: "https://provider.example.com/api/setWebhook"
+        deleteWebhook:
+          type: string
+          format: uri
+          description: "Эндпоинт удаления вебхука. Используется для отключения уведомлений от провайдера."
+          pattern: "^https?://.*$"
+          minLength: 10
+          maxLength: 2083
+          example: "https://provider.example.com/api/deleteWebhook"
+        getMessageHistory:
+          type: string
+          format: uri
+          description: "Эндпоинт получения истории сообщений. Используется при первичной синхронизации чатов."
+          pattern: "^https?://.*$"
+          minLength: 10
+          maxLength: 2083
+          example: "https://provider.example.com/api/getMessageHistory"
+        bulkMessages:
+          type: string
+          format: uri
+          description: "Эндпоинт массовой отправки сообщений. Используется для пакетной отправки нескольких сообщений."
+          pattern: "^https?://.*$"
+          minLength: 10
+          maxLength: 2083
+          example: "https://provider.example.com/api/bulkMessages"
+      required:
+        - sendMessage
+        - updateMessageContent
+        - updateMessageStatus
+        - markChatRead
+        - disconnect
+        - getChannels
+      additionalProperties: false
+    
+    # Конфигурации провайдеров
+    ProviderConfigurationRequest:
+      type: object
+      properties:
+        appCode:
+          type: string
+          description: "Системное имя провайдера"
+          minLength: 3
+          maxLength: 50
+          pattern: "^[a-z][a-z0-9_]{2,49}$"
+          example: "whatsapp_provider"
+        appVersion:
+          type: string
+          description: "Версия приложения провайдера. Должна соответствовать формату MAJOR.MINOR.PATCH."
+          pattern: "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+          example: "2.1.0"
+        configurationVersion:
+          type: string
+          description: "Версия конфигурации. Должна соответствовать формату MAJOR.MINOR.PATCH и увеличиваться при каждом обновлении."
+          pattern: "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+          example: "1.0.0"
+        providerLabel:
+          type: string
+          description: "Название провайдера"
+          minLength: 1
+          maxLength: 100
+          example: "WhatsApp"
+        endpoints:
+          $ref: "#/components/schemas/ProviderEndpoints"
+        authConfig:
+          type: object
+          description: "Конфигурация аутентификации"
+          additionalProperties: true
+          example:
+            type: "API_KEY"
+            headers:
+              "X-API-Key": "{client_token}"
+      required:
+        - appCode
+        - appVersion
+        - configurationVersion
+        - providerLabel
+        - endpoints
+        - authConfig
+    
+    ProviderConfigurationResponse:
+      allOf:
+        - $ref: "#/components/schemas/ProviderConfigurationRequest"
+        - type: object
+          properties:
+            id:
+              type: string
+              description: "Идентификатор конфигурации"
+              example: "config-001"
+            createdAt:
+              type: string
+              format: date-time
+              description: "Дата создания конфигурации"
+              example: "2023-01-01T12:00:00Z"
+            updatedAt:
+              type: string
+              format: date-time
+              description: "Дата обновления конфигурации"
+              example: "2023-01-01T12:00:00Z"
+          required: [id, createdAt, updatedAt]
+  
+  responses:
+    BadRequest:
+      description: "Некорректный запрос"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/StandardErrorResponse"
+          examples:
+            validationError:
+              summary: "Ошибка валидации"
+              value:
+                success: false
+                error:
+                  code: "VALIDATION_ERROR"
+                  message: "Запрос содержит некорректные данные"
+                  details:
+                    - field: "appCode"
+                      code: "INVALID_FORMAT"
+                      message: "Системное имя должно начинаться с буквы в нижнем регистре, за которой следуют буквы в нижнем регистре, цифры или символы подчеркивания"
+                      suggestion: "Используйте только строчные буквы латинского алфавита, цифры и символы подчеркивания. Имя должно начинаться с буквы."
+                  requestId: "req-a1b2c3d4"
+                  recommendedAction: "Исправьте формат системного имени в соответствии с требованиями"
+                meta:
+                  timestamp: "2023-01-01T12:00:00Z"
+            missingField:
+              summary: "Отсутствует обязательное поле"
+              value:
+                success: false
+                error:
+                  code: "VALIDATION_ERROR"
+                  message: "Отсутствует обязательное поле"
+                  details:
+                    - field: "providerLabel"
+                      code: "REQUIRED_FIELD"
+                      message: "Поле providerLabel является обязательным"
+                      suggestion: "Добавьте поле providerLabel в запрос"
+                  requestId: "req-a1b2c3d4"
+                  recommendedAction: "Добавьте все обязательные поля в запрос"
+                meta:
+                  timestamp: "2023-01-01T12:00:00Z"
+            invalidVersion:
+              summary: "Некорректный формат версии"
+              value:
+                success: false
+                error:
+                  code: "VALIDATION_ERROR"
+                  message: "Некорректный формат версии"
+                  details:
+                    - field: "appVersion"
+                      code: "INVALID_FORMAT"
+                      message: "Версия должна соответствовать формату MAJOR.MINOR.PATCH"
+                      suggestion: "Используйте формат X.Y.Z, где X, Y, Z - неотрицательные целые числа (например, 1.0.0, 2.3.1)"
+                  requestId: "req-a1b2c3d4"
+                  recommendedAction: "Исправьте формат версии в соответствии с семантическим версионированием"
+                meta:
+                  timestamp: "2023-01-01T12:00:00Z"
+            invalidEndpoint:
+              summary: "Некорректный URL эндпоинта"
+              value:
+                success: false
+                error:
+                  code: "VALIDATION_ERROR"
+                  message: "Некорректный URL эндпоинта"
+                  details:
+                    - field: "endpoints.sendMessage"
+                      code: "INVALID_URL"
+                      message: "Указанный URL не соответствует правилам формирования URL"
+                      suggestion: "URL должен начинаться с http:// или https:// и содержать валидный домен"
+                  requestId: "req-a1b2c3d4"
+                  recommendedAction: "Исправьте формат URL в соответствии с требованиями RFC 3986"
+                meta:
+                  timestamp: "2023-01-01T12:00:00Z"
+            versionConflict:
+              summary: "Конфликт версий"
+              value:
+                success: false
+                error:
+                  code: "VERSION_CONFLICT"
+                  message: "Некорректное обновление версии конфигурации"
+                  details:
+                    - field: "configurationVersion"
+                      code: "VERSION_MUST_INCREASE"
+                      message: "Новая версия конфигурации должна быть выше текущей (1.0.0)"
+                      suggestion: "Укажите версию выше 1.0.0, например 1.0.1 или 1.1.0"
+                  requestId: "req-a1b2c3d4"
+                  recommendedAction: "Увеличьте версию конфигурации в соответствии с семантическим версионированием"
+                meta:
+                  timestamp: "2023-01-01T12:00:00Z"
+    Unauthorized:
+      description: "Не авторизован"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/StandardErrorResponse"
+          examples:
+            tokenExpired:
+              summary: "Истёк срок действия токена"
+              value:
+                success: false
+                error:
+                  code: "TOKEN_EXPIRED"
+                  message: "Срок действия токена аутентификации истёк"
+                  requestId: "req-a1b2c3d4"
+                  recommendedAction: "Получите новый токен авторизации"
+                meta:
+                  timestamp: "2023-01-01T12:00:00Z"
+    NotFound:
+      description: "Ресурс не найден"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/StandardErrorResponse"
+          examples:
+            configNotFound:
+              summary: "Конфигурация не найдена"
+              value:
+                success: false
+                error:
+                  code: "RESOURCE_NOT_FOUND"
+                  message: "Конфигурация провайдера не найдена"
+                  details:
+                    - field: "appCode + appVersion"
+                      code: "NOT_FOUND"
+                      message: "Конфигурация для приложения whatsapp_provider версии 2.1.0 не найдена"
+                  requestId: "req-a1b2c3d4"
+                  recommendedAction: "Проверьте правильность указанных appCode и appVersion или создайте новую конфигурацию"
+                meta:
+                  timestamp: "2023-01-01T12:00:00Z"
+    Conflict:
+      description: "Конфликт данных"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/StandardErrorResponse"
+          examples:
+            configExists:
+              summary: "Конфигурация уже существует"
+              value:
+                success: false
+                error:
+                  code: "RESOURCE_ALREADY_EXISTS"
+                  message: "Конфигурация для этого провайдера и версии уже существует"
+                  requestId: "req-a1b2c3d4"
+                  recommendedAction: "Используйте метод обновления конфигурации вместо создания новой"
+                meta:
+                  timestamp: "2023-01-01T12:00:00Z"
+    InternalError:
+      description: "Внутренняя ошибка сервера"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/StandardErrorResponse"
+          examples:
+            serverError:
+              summary: "Ошибка сервера"
+              value:
+                success: false
+                error:
+                  code: "INTERNAL_SERVER_ERROR"
+                  message: "Произошла непредвиденная ошибка"
+                  requestId: "req-a1b2c3d4"
+                  recommendedAction: "Повторите запрос позже или обратитесь в службу поддержки"
+                meta:
+                  timestamp: "2023-01-01T12:00:00Z"
+
+paths:
+  /internal/v1/marketplace/provider-configurations:
+    post:
+      tags:
+        - Конфигурации провайдеров
+      summary: "Создать конфигурацию провайдера"
+      description: "Создает новую конфигурацию провайдера для указанной версии приложения."
+      operationId: createProviderConfiguration
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ProviderConfigurationRequest"
+            example:
+              appCode: "whatsapp_provider"
+              appVersion: "2.1.0"
+              configurationVersion: "1.0.0"
+              providerLabel: "WhatsApp"
+              endpoints:
+                sendMessage: "https://provider.example.com/api/sendMessage"
+                updateMessageContent: "https://provider.example.com/api/updateMessageContent"
+                updateMessageStatus: "https://provider.example.com/api/updateMessageStatus"
+                markChatRead: "https://provider.example.com/api/markChatRead"
+                disconnect: "https://provider.example.com/api/disconnect"
+                getChannels: "https://provider.example.com/api/getChannels"
+                setWebhook: "https://provider.example.com/api/setWebhook"
+                deleteWebhook: "https://provider.example.com/api/deleteWebhook"
+              authConfig:
+                type: "API_KEY"
+                headers:
+                  "X-API-Key": "{client_token}"
+      responses:
+        '201':
+          description: "Конфигурация создана"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StandardResponse"
+              example:
+                success: true
+                data:
+                  id: "config-001"
+                  appCode: "whatsapp_provider"
+                  appVersion: "2.1.0"
+                  configurationVersion: "1.0.0"
+                  providerLabel: "WhatsApp"
+                  endpoints:
+                    sendMessage: "https://provider.example.com/api/sendMessage"
+                    updateMessageContent: "https://provider.example.com/api/updateMessageContent"
+                    updateMessageStatus: "https://provider.example.com/api/updateMessageStatus"
+                    markChatRead: "https://provider.example.com/api/markChatRead"
+                    disconnect: "https://provider.example.com/api/disconnect"
+                    getChannels: "https://provider.example.com/api/getChannels"
+                    setWebhook: "https://provider.example.com/api/setWebhook"
+                    deleteWebhook: "https://provider.example.com/api/deleteWebhook"
+                  authConfig:
+                    type: "API_KEY"
+                    headers:
+                      "X-API-Key": "{client_token}"
+                  createdAt: "2023-01-01T12:00:00Z"
+                  updatedAt: "2023-01-01T12:00:00Z"
+                message: "Конфигурация провайдера успешно создана"
+                meta:
+                  timestamp: "2023-01-01T12:00:00Z"
+        '400':
+          $ref: "#/components/responses/BadRequest"
+        '401':
+          $ref: "#/components/responses/Unauthorized"
+        '409':
+          $ref: "#/components/responses/Conflict"
+    
+    get:
+      tags:
+        - Конфигурации провайдеров
+      summary: "Получить конфигурацию провайдера"
+      description: "Возвращает конфигурацию провайдера для указанной версии приложения."
+      operationId: getProviderConfiguration
+      parameters:
+        - $ref: "#/components/parameters/AppCode"
+        - $ref: "#/components/parameters/AppVersion"
+      responses:
+        '200':
+          description: "Конфигурация провайдера"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StandardResponse"
+              example:
+                success: true
+                data:
+                  id: "config-001"
+                  appCode: "whatsapp_provider"
+                  appVersion: "2.1.0"
+                  configurationVersion: "1.0.0"
+                  providerLabel: "WhatsApp"
+                  endpoints:
+                    sendMessage: "https://provider.example.com/api/sendMessage"
+                    updateMessageContent: "https://provider.example.com/api/updateMessageContent"
+                    updateMessageStatus: "https://provider.example.com/api/updateMessageStatus"
+                    markChatRead: "https://provider.example.com/api/markChatRead"
+                    disconnect: "https://provider.example.com/api/disconnect"
+                    getChannels: "https://provider.example.com/api/getChannels"
+                    setWebhook: "https://provider.example.com/api/setWebhook"
+                    deleteWebhook: "https://provider.example.com/api/deleteWebhook"
+                  authConfig:
+                    type: "API_KEY"
+                    headers:
+                      "X-API-Key": "{client_token}"
+                  createdAt: "2023-01-01T12:00:00Z"
+                  updatedAt: "2023-01-01T12:00:00Z"
+                message: "Конфигурация провайдера успешно получена"
+                meta:
+                  timestamp: "2023-01-01T12:05:00Z"
+        '400':
+          $ref: "#/components/responses/BadRequest"
+        '401':
+          $ref: "#/components/responses/Unauthorized"
+        '404':
+          $ref: "#/components/responses/NotFound"
+    
+    put:
+      tags:
+        - Конфигурации провайдеров
+      summary: "Обновить конфигурацию провайдера"
+      description: "Обновляет существующую конфигурацию провайдера для указанной версии приложения."
+      operationId: updateProviderConfiguration
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ProviderConfigurationRequest"
+            example:
+              appCode: "whatsapp_provider"
+              appVersion: "2.1.0"
+              configurationVersion: "1.0.1"
+              providerLabel: "WhatsApp"
+              endpoints:
+                sendMessage: "https://provider.example.com/api/sendMessage"
+                updateMessageContent: "https://provider.example.com/api/updateMessageContent"
+                updateMessageStatus: "https://provider.example.com/api/updateMessageStatus"
+                markChatRead: "https://provider.example.com/api/markChatRead"
+                disconnect: "https://provider.example.com/api/disconnect"
+                getChannels: "https://provider.example.com/api/getChannels"
+                setWebhook: "https://provider.example.com/api/setWebhook"
+                deleteWebhook: "https://provider.example.com/api/deleteWebhook"
+                getMessageHistory: "https://provider.example.com/api/getMessageHistory"
+              authConfig:
+                type: "API_KEY"
+                headers:
+                  "X-API-Key": "{client_token}"
+      responses:
+        '200':
+          description: "Конфигурация обновлена"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StandardResponse"
+              example:
+                success: true
+                data:
+                  id: "config-001"
+                  appCode: "whatsapp_provider"
+                  appVersion: "2.1.0"
+                  configurationVersion: "1.0.1"
+                  providerLabel: "WhatsApp"
+                  endpoints:
+                    sendMessage: "https://provider.example.com/api/sendMessage"
+                    updateMessageContent: "https://provider.example.com/api/updateMessageContent"
+                    updateMessageStatus: "https://provider.example.com/api/updateMessageStatus"
+                    markChatRead: "https://provider.example.com/api/markChatRead"
+                    disconnect: "https://provider.example.com/api/disconnect"
+                    getChannels: "https://provider.example.com/api/getChannels"
+                    setWebhook: "https://provider.example.com/api/setWebhook"
+                    deleteWebhook: "https://provider.example.com/api/deleteWebhook"
+                    getMessageHistory: "https://provider.example.com/api/getMessageHistory"
+                  authConfig:
+                    type: "API_KEY"
+                    headers:
+                      "X-API-Key": "{client_token}"
+                  createdAt: "2023-01-01T12:00:00Z"
+                  updatedAt: "2023-01-01T13:00:00Z"
+                message: "Конфигурация провайдера успешно обновлена"
+                meta:
+                  timestamp: "2023-01-01T13:00:00Z"
+        '400':
+          $ref: "#/components/responses/BadRequest"
+        '401':
+          $ref: "#/components/responses/Unauthorized"
+        '404':
+          $ref: "#/components/responses/NotFound"

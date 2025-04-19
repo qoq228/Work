@@ -1,0 +1,672 @@
+openapi: 3.0.3
+info:
+  title: "Внутренний API модуля коммуникаций SberCRM для маркетплейса"
+  version: "1.0.0"
+  description: |
+    Внутренний API модуля коммуникаций SberCRM для маркетплейса.
+    Обеспечивает управление провайдерами и установками для тенантов.
+tags:
+  - name: "Провайдеры"
+    description: "Управление провайдерами"
+  - name: "Конфигурации тенантов"
+    description: "Управление конфигурациями провайдеров для тенантов"
+security:
+  - BearerAuth: []
+components:
+  parameters:
+    AppCode:
+      name: appCode
+      in: path
+      required: true
+      description: "Системное имя провайдера. Должно соответствовать системному имени приложения в маркетплейсе."
+      schema:
+        type: string
+        minLength: 3
+        maxLength: 50
+        pattern: "^[a-z][a-z0-9_]{2,49}$"
+        example: "whatsapp_provider"
+    TenantId:
+      name: "tenantId"
+      in: header
+      required: true
+      description: "Идентификатор тенанта, выполняющего операцию."
+      schema:
+        type: string
+        format: uuid
+        example: "123e4567-e89b-12d3-a456-426614174222"
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: "JWT токен для аутентификации. Срок действия - 24 часа. После истечения срока действия необходимо запросить новый токен."
+  schemas:
+    ErrorDetail:
+      type: object
+      properties:
+        field:
+          type: string
+          description: "Название поля, содержащего ошибку"
+          example: "configurationVersion"
+        code:
+          type: string
+          description: "Код ошибки для данного поля"
+          example: "INVALID_FORMAT"
+        message:
+          type: string
+          description: "Описание ошибки для данного поля"
+          example: "Версия должна соответствовать формату MAJOR.MINOR.PATCH"
+        suggestion:
+          type: string
+          nullable: true
+          description: "Рекомендация по исправлению ошибки"
+          example: "Используйте формат X.Y.Z, где X, Y, Z - неотрицательные целые числа"
+      required: [code, message]
+    
+    # Базовая схема для всех ответов
+    BaseResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          description: "Флаг успешного выполнения"
+        meta:
+          type: object
+          properties:
+            timestamp:
+              type: string
+              format: date-time
+              description: "Время выполнения запроса"
+              example: "2023-01-01T12:00:00Z"
+          required: [timestamp]
+      required: [success, meta]
+
+    # Схема для ответов с ошибкой
+    StandardErrorResponse:
+      allOf:
+        - $ref: "#/components/schemas/BaseResponse"
+        - type: object
+          properties:
+            success:
+              example: false
+            error:
+              type: object
+              properties:
+                code:
+                  type: string
+                  description: "Код ошибки"
+                  example: "INVALID_REQUEST"
+                  enum:
+                    - INVALID_REQUEST           # Общая ошибка валидации запроса
+                    - VALIDATION_ERROR          # Ошибка валидации полей
+                    - RESOURCE_NOT_FOUND        # Ресурс не найден
+                    - RESOURCE_ALREADY_EXISTS   # Ресурс уже существует
+                    - RESOURCE_CONFLICT         # Конфликт при работе с ресурсом
+                    - DEPENDENCY_ERROR          # Ошибка зависимостей между ресурсами
+                    - AUTHORIZATION_ERROR       # Ошибка авторизации
+                    - AUTHENTICATION_ERROR      # Ошибка аутентификации
+                    - TOKEN_EXPIRED             # Истёк срок действия токена
+                    - INTERNAL_SERVER_ERROR     # Внутренняя ошибка сервера
+                    - SERVICE_UNAVAILABLE       # Сервис недоступен
+                    - CONFIGURATION_LOCKED      # Конфигурация заблокирована
+                    - VERSION_CONFLICT          # Конфликт версий
+                    - INVALID_VERSION_SEQUENCE  # Неверная последовательность версий
+                    - INVALID_PROVIDER_STATE    # Некорректное состояние провайдера
+                message:
+                  type: string
+                  description: "Сообщение об ошибке"
+                  example: "Запрос содержит некорректные данные"
+                details:
+                  type: array
+                  items:
+                    $ref: "#/components/schemas/ErrorDetail"
+                  description: "Подробная информация об ошибках в полях запроса"
+                requestId:
+                  type: string
+                  description: "Идентификатор запроса"
+                  example: "req-a1b2c3d4"
+                recommendedAction:
+                  type: string
+                  nullable: true
+                  description: "Рекомендуемое действие для исправления ошибки"
+                  example: "Повторите попытку через 60 секунд или обратитесь в службу поддержки"
+              required: [code, message]
+          required: [error]
+    
+    # Схема для успешных ответов
+    StandardResponse:
+      allOf:
+        - $ref: "#/components/schemas/BaseResponse"
+        - type: object
+          properties:
+            success:
+              example: true
+            data:
+              type: object
+              nullable: true
+              description: "Данные ответа"
+            message:
+              type: string
+              description: "Информационное сообщение"
+              example: "Операция выполнена успешно"
+          required: [message]
+    
+    # Провайдеры
+    ProviderCreateRequest:
+      type: object
+      properties:
+        appCode:
+          type: string
+          description: "Системное имя провайдера. Должно соответствовать системному имени приложения в маркетплейсе."
+          pattern: "^[a-z][a-z0-9_]{2,49}$"
+          minLength: 3
+          maxLength: 50
+          example: "whatsapp_provider"
+      required:
+        - appCode
+    
+    ProviderResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          description: "Идентификатор провайдера"
+          example: "provider-001"
+        appCode:
+          type: string
+          description: "Системное имя провайдера"
+          example: "whatsapp_provider"
+      required: [id, appCode]
+    
+    ProviderConfigurationSchema:
+      type: object
+      properties:
+        id:
+          type: string
+          description: "Идентификатор конфигурации провайдера"
+          example: "config-001"
+        providerId:
+          type: string
+          description: "Идентификатор провайдера"
+          example: "provider-001"
+        app_label:
+          type: string
+          description: "Название приложения провайдера"
+          example: "WhatsApp Provider"
+        app_version:
+          type: string
+          description: "Версия приложения провайдера"
+          example: "2.1.0"
+      required: [id, providerId, app_label, app_version]
+
+    # Конфигурации тенантов
+    TenantConfigurationRequest:
+      type: object
+      properties:
+        appCode:
+          type: string
+          description: "Системное имя провайдера"
+          minLength: 3
+          maxLength: 50
+          pattern: "^[a-z][a-z0-9_]{2,49}$"
+          example: "whatsapp_provider"
+        appVersion:
+          type: string
+          description: "Версия приложения провайдера"
+          pattern: "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+          example: "2.1.0"
+      required:
+        - appCode
+        - appVersion
+    
+    TenantConfigurationResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          description: "Идентификатор конфигурации тенанта"
+          example: "config-001"
+        tenantId:
+          type: string
+          description: "Идентификатор тенанта"
+          example: "tenant-001"
+        providerId:
+          type: string
+          description: "Идентификатор провайдера"
+          example: "provider-001"
+        providerConfigurationId:
+          type: string
+          description: "Идентификатор конфигурации провайдера"
+          example: "prov-config-001"
+      required: [id, tenantId, providerId, providerConfigurationId]
+  
+  responses:
+    BadRequest:
+      description: "Некорректный запрос"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/StandardErrorResponse"
+          examples:
+            validationError:
+              summary: "Ошибка валидации"
+              value:
+                success: false
+                error:
+                  code: "VALIDATION_ERROR"
+                  message: "Запрос содержит некорректные данные"
+                  details:
+                    - field: "appCode"
+                      code: "INVALID_FORMAT"
+                      message: "Системное имя должно начинаться с буквы в нижнем регистре, за которой следуют буквы в нижнем регистре, цифры или символы подчеркивания"
+                      suggestion: "Используйте только строчные буквы латинского алфавита, цифры и символы подчеркивания. Имя должно начинаться с буквы."
+                  requestId: "req-a1b2c3d4"
+                  recommendedAction: "Исправьте формат системного имени в соответствии с требованиями"
+                meta:
+                  timestamp: "2023-01-01T12:00:00Z"
+            missingField:
+              summary: "Отсутствует обязательное поле"
+              value:
+                success: false
+                error:
+                  code: "VALIDATION_ERROR"
+                  message: "Отсутствует обязательное поле"
+                  details:
+                    - field: "appVersion"
+                      code: "REQUIRED_FIELD"
+                      message: "Поле appVersion является обязательным"
+                      suggestion: "Добавьте поле appVersion в запрос"
+                  requestId: "req-a1b2c3d4"
+                  recommendedAction: "Добавьте все обязательные поля в запрос"
+                meta:
+                  timestamp: "2023-01-01T12:00:00Z"
+            invalidVersion:
+              summary: "Некорректный формат версии"
+              value:
+                success: false
+                error:
+                  code: "VALIDATION_ERROR"
+                  message: "Некорректный формат версии"
+                  details:
+                    - field: "appVersion"
+                      code: "INVALID_FORMAT"
+                      message: "Версия должна соответствовать формату MAJOR.MINOR.PATCH"
+                      suggestion: "Используйте формат X.Y.Z, где X, Y, Z - неотрицательные целые числа (например, 1.0.0, 2.3.1)"
+                  requestId: "req-a1b2c3d4"
+                  recommendedAction: "Исправьте формат версии в соответствии с семантическим версионированием"
+                meta:
+                  timestamp: "2023-01-01T12:00:00Z"
+    Unauthorized:
+      description: "Не авторизован"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/StandardErrorResponse"
+          examples:
+            tokenExpired:
+              summary: "Истёк срок действия токена"
+              value:
+                success: false
+                error:
+                  code: "TOKEN_EXPIRED"
+                  message: "Срок действия токена аутентификации истёк"
+                  requestId: "req-a1b2c3d4"
+                  recommendedAction: "Получите новый токен авторизации"
+                meta:
+                  timestamp: "2023-01-01T12:00:00Z"
+            invalidToken:
+              summary: "Недействительный токен"
+              value:
+                success: false
+                error:
+                  code: "AUTHENTICATION_ERROR"
+                  message: "Недействительный токен аутентификации"
+                  requestId: "req-a1b2c3d4"
+                  recommendedAction: "Проверьте корректность токена авторизации или получите новый"
+                meta:
+                  timestamp: "2023-01-01T12:00:00Z"
+            missingToken:
+              summary: "Отсутствует токен"
+              value:
+                success: false
+                error:
+                  code: "AUTHENTICATION_ERROR"
+                  message: "Отсутствует токен аутентификации"
+                  requestId: "req-a1b2c3d4"
+                  recommendedAction: "Добавьте токен авторизации в заголовок Authorization"
+                meta:
+                  timestamp: "2023-01-01T12:00:00Z"
+    NotFound:
+      description: "Ресурс не найден"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/StandardErrorResponse"
+          examples:
+            providerNotFound:
+              summary: "Провайдер не найден"
+              value:
+                success: false
+                error:
+                  code: "RESOURCE_NOT_FOUND"
+                  message: "Указанный провайдер не найден"
+                  requestId: "req-a1b2c3d4"
+                  recommendedAction: "Проверьте идентификатор провайдера и повторите запрос"
+                meta:
+                  timestamp: "2023-01-01T12:00:00Z"
+            versionNotFound:
+              summary: "Версия не найдена"
+              value:
+                success: false
+                error:
+                  code: "RESOURCE_NOT_FOUND"
+                  message: "Указанная версия не найдена"
+                  requestId: "req-a1b2c3d4"
+                  recommendedAction: "Проверьте номер версии и повторите запрос"
+                meta:
+                  timestamp: "2023-01-01T12:00:00Z"
+    Conflict:
+      description: "Конфликт данных"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/StandardErrorResponse"
+          examples:
+            providerExists:
+              summary: "Провайдер уже существует"
+              value:
+                success: false
+                error:
+                  code: "RESOURCE_ALREADY_EXISTS"
+                  message: "Провайдер с таким системным именем уже существует"
+                  requestId: "req-a1b2c3d4"
+                  recommendedAction: "Используйте другое системное имя провайдера или обновите существующего провайдера"
+                meta:
+                  timestamp: "2023-01-01T12:00:00Z"
+            configExists:
+              summary: "Конфигурация уже существует"
+              value:
+                success: false
+                error:
+                  code: "RESOURCE_ALREADY_EXISTS"
+                  message: "Конфигурация для этого провайдера уже существует"
+                  requestId: "req-a1b2c3d4"
+                  recommendedAction: "Используйте метод обновления конфигурации вместо создания новой"
+                meta:
+                  timestamp: "2023-01-01T12:00:00Z"
+    InternalError:
+      description: "Внутренняя ошибка сервера"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/StandardErrorResponse"
+          examples:
+            serverError:
+              summary: "Ошибка сервера"
+              value:
+                success: false
+                error:
+                  code: "INTERNAL_SERVER_ERROR"
+                  message: "Произошла непредвиденная ошибка"
+                  requestId: "req-a1b2c3d4"
+                  recommendedAction: "Повторите запрос позже или обратитесь в службу поддержки"
+                meta:
+                  timestamp: "2023-01-01T12:00:00Z"
+            databaseError:
+              summary: "Ошибка базы данных"
+              value:
+                success: false
+                error:
+                  code: "INTERNAL_SERVER_ERROR"
+                  message: "Ошибка при работе с базой данных"
+                  requestId: "req-a1b2c3d4"
+                  recommendedAction: "Повторите запрос позже или обратитесь в службу поддержки"
+                meta:
+                  timestamp: "2023-01-01T12:00:00Z"
+    TooManyRequests:
+      description: "Слишком много запросов"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/StandardErrorResponse"
+          examples:
+            rateLimitExceeded:
+              summary: "Превышен лимит запросов"
+              value:
+                success: false
+                error:
+                  code: "RATE_LIMIT_EXCEEDED"
+                  message: "Превышен лимит запросов"
+                  requestId: "req-a1b2c3d4"
+                  recommendedAction: "Пожалуйста, повторите запрос через 60 секунд"
+                meta:
+                  timestamp: "2023-01-01T12:00:00Z"
+
+paths:
+  # ПРОВАЙДЕРЫ
+  /internal/v1/providers:
+    post:
+      tags:
+        - Провайдеры
+      summary: "Загрузка провайдера"
+      operationId: uploadProvider
+      parameters: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ProviderCreateRequest"
+            examples:
+              whatsappExample:
+                summary: "Создание провайдера WhatsApp"
+                value:
+                  appCode: "whatsapp_provider"
+                description: |
+                  При создании провайдера необходимо указать только системное имя (appCode).
+                  Этот идентификатор должен быть уникальным и совпадать с системным именем приложения в маркетплейсе.
+              telegramExample:
+                summary: "Создание провайдера Telegram" 
+                value:
+                  appCode: "telegram_provider"
+              viberExample:
+                summary: "Создание провайдера Viber" 
+                value:
+                  appCode: "viber_provider"
+      responses:
+        '201':
+          description: "Провайдер загружен"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StandardResponse"
+              examples:
+                whatsappProvider:
+                  summary: "Успешная загрузка провайдера WhatsApp"
+                  value:
+                    success: true
+                    data:
+                      id: "provider-123"
+                      appCode: "whatsapp_provider"
+                    message: "Провайдер успешно загружен"
+                    meta:
+                      timestamp: "2023-01-01T12:00:00Z"
+                  description: |
+                    Успешное создание провайдера возвращает:
+                    - providerId: Уникальный идентификатор провайдера в системе
+                    - appCode: Системное имя провайдера, указанное при создании
+                telegramProvider:
+                  summary: "Успешная загрузка провайдера Telegram"
+                  value:
+                    success: true
+                    data:
+                      id: "provider-456"
+                      appCode: "telegram_provider"
+                    message: "Провайдер успешно загружен"
+                    meta:
+                      timestamp: "2023-01-01T12:05:00Z"
+        '400':
+          $ref: "#/components/responses/BadRequest"
+        '401':
+          $ref: "#/components/responses/Unauthorized"
+        '409':
+          $ref: "#/components/responses/Conflict"
+        '429':
+          $ref: "#/components/responses/TooManyRequests"
+  
+  # КОНФИГУРАЦИИ ТЕНАНТОВ
+  /internal/v1/tenant-configurations:
+    post:
+      tags:
+        - Конфигурации тенантов
+      summary: "Создать конфигурацию провайдера для тенанта"
+      operationId: createTenantConfiguration
+      parameters:
+        - $ref: "#/components/parameters/TenantId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TenantConfigurationRequest"
+            examples:
+              whatsappTenant:
+                summary: "Создание конфигурации WhatsApp для тенанта"
+                value:
+                  appCode: "whatsapp_provider"
+                  appVersion: "2.1.0"
+                description: |
+                  Запрос на создание конфигурации WhatsApp для тенанта. Необходимо указать:
+                  - appCode: Системное имя провайдера
+                  - appVersion: Версия приложения провайдера
+                  
+                  Идентификатор тенанта передается в заголовке tenantId.
+              telegramTenant:
+                summary: "Создание конфигурации Telegram для тенанта"
+                value:
+                  appCode: "telegram_provider"
+                  appVersion: "1.5.0"
+      responses:
+        '201':
+          description: "Конфигурация создана"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StandardResponse"
+              examples:
+                whatsappTenantCreated:
+                  summary: "Успешное создание конфигурации WhatsApp для тенанта"
+                  value:
+                    success: true
+                    data:
+                      id: "tenant-config-001"
+                      tenantId: "tenant-123"
+                      providerId: "provider-123"
+                      providerConfigurationId: "prov-config-001"
+                    message: "Конфигурация успешно создана для тенанта"
+                    meta:
+                      timestamp: "2023-01-01T12:00:00Z"
+                telegramTenantCreated:
+                  summary: "Успешное создание конфигурации Telegram для тенанта"
+                  value:
+                    success: true
+                    data:
+                      id: "tenant-config-002"
+                      tenantId: "tenant-456"
+                      providerId: "provider-456"
+                      providerConfigurationId: "prov-config-002"
+                    message: "Конфигурация успешно создана для тенанта"
+                    meta:
+                      timestamp: "2023-01-01T12:05:00Z"
+        '400':
+          $ref: "#/components/responses/BadRequest"
+        '401':
+          $ref: "#/components/responses/Unauthorized"
+        '409':
+          $ref: "#/components/responses/Conflict"
+        '429':
+          $ref: "#/components/responses/TooManyRequests"
+    
+    put:
+      tags:
+        - Конфигурации тенантов
+      summary: "Обновить конфигурацию провайдера для тенанта"
+      operationId: updateTenantConfiguration
+      parameters:
+        - $ref: "#/components/parameters/TenantId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TenantConfigurationRequest"
+            examples:
+              whatsappTenantUpdate:
+                summary: "Обновление конфигурации WhatsApp для тенанта"
+                value:
+                  appCode: "whatsapp_provider"
+                  appVersion: "2.2.0"
+                description: |
+                  Запрос на обновление версии приложения WhatsApp для тенанта:
+                  - appCode: Системное имя провайдера
+                  - appVersion: Новая версия приложения провайдера
+                  
+                  Идентификатор тенанта передается в заголовке tenantId.
+              telegramTenantUpdate:
+                summary: "Обновление конфигурации Telegram для тенанта"
+                value:
+                  appCode: "telegram_provider"
+                  appVersion: "1.6.0"
+      responses:
+        '200':
+          description: "Конфигурация обновлена"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StandardResponse"
+              examples:
+                whatsappTenantUpdated:
+                  summary: "Успешное обновление конфигурации WhatsApp для тенанта"
+                  value:
+                    success: true
+                    data:
+                      id: "tenant-config-001"
+                      tenantId: "tenant-123"
+                      providerId: "provider-123"
+                      providerConfigurationId: "prov-config-003"
+                    message: "Конфигурация успешно обновлена для тенанта"
+                    meta:
+                      timestamp: "2023-01-01T13:00:00Z"
+        '400':
+          $ref: "#/components/responses/BadRequest"
+        '401':
+          $ref: "#/components/responses/Unauthorized"
+        '404':
+          $ref: "#/components/responses/NotFound"
+        '429':
+          $ref: "#/components/responses/TooManyRequests"
+  
+    delete:
+      tags:
+        - Конфигурации тенантов
+      summary: "Удалить конфигурацию провайдера для тенанта"
+      operationId: deleteTenantConfiguration
+      parameters:
+        - $ref: "#/components/parameters/TenantId"
+        - name: appCode
+          in: query
+          required: true
+          description: "Системное имя провайдера"
+          schema:
+            type: string
+            pattern: "^[a-z][a-z0-9_]{2,49}$"
+            example: "whatsapp_provider"
+      responses:
+        '204':
+          description: "Конфигурация удалена"
+        '401':
+          $ref: "#/components/responses/Unauthorized"
+        '404':
+          $ref: "#/components/responses/NotFound"
+        '429':
+          $ref: "#/components/responses/TooManyRequests"
